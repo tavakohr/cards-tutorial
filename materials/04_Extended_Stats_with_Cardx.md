@@ -103,16 +103,19 @@ In oncology and cardiovascular studies, time-to-event endpoints are standard. Th
 ### Syntax:
 ```r
 ard_survival_survfit(
-  data,
-  variables,
-  by = NULL,
+  x,
+  y,
+  variables = NULL,
   times = NULL,
-  start_time = 0,
+  probs = NULL,
+  type = NULL,
   ...
 )
 ```
 
-- **`variables`:** Must be a named character vector mapping `time` and `event` columns. E.g., `variables = c(time = "AVAL", event = "1-CNSR")` (note that the event variable should be numeric where 1 represents the event and 0 represents censoring).
+- **`x`:** The input data frame.
+- **`y`:** The survival response object (e.g. `Surv(time, event)`). Note that R's `Surv()` expects `event = 1` to denote event occurrence and `0` to denote censoring. E.g., `Surv(AVAL, 1 - CNSR)`.
+- **`variables`:** The grouping/strata variable (e.g. `TRT01A`).
 - **`times`:** A numeric vector of time points (e.g. `c(6, 12, 18)`) at which to extract survival statistics.
 
 ### Example:
@@ -122,11 +125,11 @@ library(survival)
 # Filter for the primary endpoint parameter (e.g. Overall Survival)
 adtte_os <- adtte %>% filter(PARAMCD == "OS")
 
-# Calculate survival estimates at Months 6, 12, and 18
+# Calculate survival estimates at Months 6, 12, and 18, grouped by TRT01A
 ard_km <- ard_survival_survfit(
-  data = adtte_os,
-  by = TRT01A,
-  variables = c(time = "AVAL", event = "1-CNSR"),
+  x = adtte_os,
+  y = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A,
   times = c(6, 12, 18)
 )
 ```

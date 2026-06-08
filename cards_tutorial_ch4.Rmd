@@ -134,7 +134,11 @@ grade_result(
 
 In oncology trials, Overall Survival (OS) is a key parameter. We need to calculate KM survival estimates at month time points (6 and 12 months) from the `adtte` dataset.
 
-The variable argument must specify: `variables = c(time = "AVAL", event = "1-CNSR")` (since `CNSR = 1` is censored, and `1 - CNSR` represents event occurrence).
+The `ard_survival_survfit()` function accepts:
+- `x`: The input data frame.
+- `y`: The survival response object, created with `Surv(time, event)` (or `survival::Surv(time, event)`).
+- `variables`: The grouping/strata variable (e.g. `TRT01A`).
+- `times`: The numeric vector of time points for estimates.
 
 ```{r ch4-ex2, exercise=TRUE, exercise.lines=15}
 # Filter for Overall Survival (OS)
@@ -144,9 +148,9 @@ adtte_os <- adtte %>% filter(PARAMCD == "OS")
 # Hint: use ard_survival_survfit() and specify times = c(6, 12)
 
 ard_km_rates <- ard_survival_survfit(
-  data = adtte_os,
-  by = TRT01A,
-  variables = c(time = "AVAL", event = "1-CNSR"),
+  x = adtte_os,
+  y = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A,
   times = ___
 )
 
@@ -162,9 +166,9 @@ ard_km_rates %>%
 
 ```{r ch4-ex2-solution}
 ard_km_rates <- ard_survival_survfit(
-  data = adtte_os,
-  by = TRT01A,
-  variables = c(time = "AVAL", event = "1-CNSR"),
+  x = adtte_os,
+  y = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A,
   times = c(6, 12)
 )
 ard_km_rates %>%
