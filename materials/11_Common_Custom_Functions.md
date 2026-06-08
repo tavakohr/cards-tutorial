@@ -26,7 +26,7 @@ geom_cv <- function(x) {
 # ard_continuous(
 #   data = adsl,
 #   variables = AGE,
-#   statistics = list(AGE = list(gmean = geom_mean, gcv = geom_cv))
+#   statistic = list(AGE = list(gmean = geom_mean, gcv = geom_cv))
 # )
 ```
 
@@ -57,7 +57,7 @@ mean_ci_upper <- function(x, conf.level = 0.95) {
 # ard_continuous(
 #   data = adsl,
 #   variables = AGE,
-#   statistics = list(AGE = list(
+#   statistic = list(AGE = list(
 #     mean = mean,
 #     ci_lower = mean_ci_lower,
 #     ci_upper = mean_ci_upper
@@ -86,7 +86,7 @@ p90 <- function(x) {
 # ard_continuous(
 #   data = adsl,
 #   variables = AGE,
-#   statistics = list(AGE = list(
+#   statistic = list(AGE = list(
 #     p10 = p10,
 #     median = median,
 #     p90 = p90
@@ -108,7 +108,7 @@ ard_results <- ard_continuous(
   data = adsl,
   variables = AGE,
   by = TRT01A,
-  statistics = list(
+  statistic = list(
     AGE = list(
       n = function(x) sum(!is.na(x)),
       mean = mean,

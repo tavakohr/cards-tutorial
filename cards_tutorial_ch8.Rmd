@@ -40,7 +40,7 @@ data("adsl",  package = "pharmaverseadam")
 
 In clinical programming, we often need to calculate non-standard statistics (like geometric means in PK/PD studies) or audit calculations for regulatory compliance. 
 
-- **Custom Statistics**: You can pass a named list of custom functions to `ard_continuous(statistics = ...)` to calculate anything.
+- **Custom Statistics**: You can pass a named list of custom functions to `ard_continuous(statistic = ...)` to calculate anything.
 - **CDISC ARS Alignment**: Because `{cards}` ARD is structured, it maps directly, row-by-row, to the CDISC Analysis Results Standard (ARS) JSON schema's **`OperationResult`** objects, enabling automated regulatory validation and traceability.
 
 ---
