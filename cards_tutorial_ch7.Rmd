@@ -1,7 +1,9 @@
 ---
 title: "cards & cardx R Packages — Interactive Training"
-subtitle: "Chapter 7: Advanced Workflows"
+subtitle: "Chapter 7: Exporting and MS Word Styling"
 author: "Hamid Tavakoli, MD, MSc"
+tutorial:
+  version: 1.0
 output:
   learnr::tutorial:
     progressive: true
@@ -9,183 +11,144 @@ output:
     css: www/custom.css
 runtime: shiny_prerendered
 description: >
-  Write custom statistical functions and explore the field-by-field mapping between cards ARDs and CDISC ARS structures.
+  Learn how to bridge gtsummary to MS Word using flextable and officer to enforce strict clinical layouts, margins, headers, and footers.
 ---
 
 ```{r setup, include=FALSE}
 library(learnr)
 library(gradethis)
 library(pharmaverseadam)
-library(pharmaversesdtm)
 library(dplyr)
 library(cards)
-library(cardx)
-library(jsonlite)
-library(glue)
+library(gtsummary)
+library(flextable)
+library(officer)
 
 tutorial_options(
   exercise.timelimit = 60
 )
 gradethis_setup()
 
-# Load datasets
-data("adsl",  package = "pharmaverseadam")
+data("adsl", package = "pharmaverseadam")
+
+# Pre-compute an ARD and table for exercises to save time
+ard_demog <- ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by = TRT01A,
+  .missing = TRUE
+)
+
+base_table <- tbl_ard_summary(
+  cards = ard_demog,
+  include = c(AGE, SEX),
+  by = TRT01A
+) %>%
+  modify_spanning_header(all_stat_cols() ~ "**Treatment Group**")
 ```
 
 ---
 
-## Chapter 7: Advanced Workflows
+## Chapter 7: Exporting to MS Word
 
-### 7.1 Custom Statistics & Standards Alignment
+While `{gtsummary}` handles statistical mapping and internal table strings flawlessly, the clinical trials industry heavily relies on Microsoft Word (`.docx`) or RTF formats for final deliverables like Clinical Study Reports (CSRs).
 
-In clinical programming, we often need to calculate non-standard statistics (like geometric means in PK/PD studies) or audit calculations for regulatory compliance. 
+The bridge between `{gtsummary}` and MS Word is the **`{flextable}`** package. 
 
-- **Custom Statistics**: You can pass a named list of custom functions to `ard_continuous(statistics = ...)` to calculate anything.
-- **CDISC ARS Alignment**: Because `{cards}` ARD is structured, it maps directly, row-by-row, to the CDISC Analysis Results Standard (ARS) JSON schema's **`OperationResult`** objects, enabling automated regulatory validation and traceability.
+### 7.1 Injecting Headers and Footers
+
+Clinical tables require rigid structural metadata (e.g., Protocol ID, Sponsor name, footnotes, and generation timestamps). You can embed these directly into the table block using `add_header_lines()` and `add_footer_lines()`.
 
 ---
 
-## Exercise 7.1 — Run a Custom Geometric Mean Statistic
+## Exercise 7.1 — Headers and Footers
 
-Let's write a simple geometric mean function: `geom_mean = function(x) exp(mean(log(x[x > 0]), na.rm = TRUE))`. We will pass it to `ard_continuous()` to summarize `AGE` grouped by `TRT01A`.
+Convert the existing `base_table` into a `flextable` and inject a sponsor header and a timestamp footer.
 
-```{r ch7-ex1, exercise=TRUE, exercise.lines=20}
-# 1. Define the geometric mean function
-geom_mean <- function(x) {
-  exp(mean(log(x[x > 0]), na.rm = TRUE))
-}
+```{r ch7-ex1, exercise=TRUE, exercise.lines=15}
+# Convert the gtsummary object to flextable
+flex_tbl <- base_table %>%
+  ___()
 
-# 2. Run ard_continuous using the custom function
-# Hint: Pass your function as a named item inside statistics = list(AGE = list(gmean = ...))
+# Add header and footer lines
+flex_tbl_styled <- flex_tbl %>%
+  # Hint: add_header_lines("Protocol: ABC-123")
+  ___ %>%
+  # Hint: add_footer_lines("Generated via R-4.4")
+  ___
 
-ard_custom <- ard_continuous(
-  data = adsl,
-  variables = AGE,
-  by = TRT01A,
-  statistics = list(
-    AGE = list(
-      gmean = ___
-    )
-  ),
-  fmt_fn = list(
-    AGE = list(
-      gmean = 1
-    )
-  )
-)
-
-# Look at the results
-ard_custom %>%
-  apply_fmt_fun() %>%
-  unlist_ard_columns(columns = stat_fmt) %>%
-  select(group1_level, variable, stat_name, stat_fmt)
+flex_tbl_styled
 ```
 
 ```{r ch7-ex1-hint-1}
-# Set gmean = geom_mean inside statistics
+# flex_tbl <- base_table %>% as_flex_table()
+# flex_tbl_styled <- flex_tbl %>%
+#   add_header_lines("Protocol: ABC-123") %>%
+#   add_footer_lines("Generated via R-4.4")
 ```
 
 ```{r ch7-ex1-solution}
-geom_mean <- function(x) {
-  exp(mean(log(x[x > 0]), na.rm = TRUE))
-}
+flex_tbl <- base_table %>%
+  as_flex_table()
 
-ard_custom <- ard_continuous(
-  data = adsl,
-  variables = AGE,
-  by = TRT01A,
-  statistics = list(
-    AGE = list(
-      gmean = geom_mean
-    )
-  ),
-  fmt_fn = list(
-    AGE = list(
-      gmean = 1
-    )
-  )
-)
-ard_custom %>%
-  apply_fmt_fun() %>%
-  unlist_ard_columns(columns = stat_fmt) %>%
-  select(group1_level, variable, stat_name, stat_fmt)
+flex_tbl_styled <- flex_tbl %>%
+  add_header_lines("Protocol: ABC-123") %>%
+  add_footer_lines("Generated via R-4.4")
+
+flex_tbl_styled
 ```
 
 ```{r ch7-ex1-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "gmean" %in% .result$stat_name, "Correct! You successfully calculated and formatted a custom statistic. This demonstrates how extensible the `{cards}` package is for non-standard clinical summaries."),
-  fail_if(~ TRUE, "Check that you map gmean = geom_mean inside the nested statistics list and format the output.")
+  pass_if(~ inherits(.result, "flextable"), "Success! Notice how the header and footer are attached directly to the grid of the table."),
+  fail_if(~ TRUE, "Check your function names: as_flex_table(), add_header_lines(), and add_footer_lines().")
 )
 ```
 
 ---
 
-## Exercise 7.2 — Map a Flat ARD Row to CDISC ARS JSON
+## Exercise 7.2 — Advanced Document Layouts (`{officer}`)
 
-Each row in a `{cards}` ARD corresponds to a CDISC ARS `OperationResult` object inside `Analysis.results`. 
+By default, `save_as_docx()` prints to a standard portrait page. Clinical tables usually have many columns (e.g., multiple treatment arms plus a total column) and require **Landscape** orientation.
 
-Write a simple mapper function that takes a single-row ARD dataframe (or list) and maps its elements to the CDISC ARS JSON list structure:
-- `stat_name` -> `operationId`
-- `group1` -> `groupingId`
-- `group1_level` -> `groupId`
-- `stat` -> `rawValue`
-- `stat_fmt` -> `formattedValue`
+To define page layouts and margins in Word, we use the `{officer}` package to define a **section property** (`prop_section`).
 
-```{r ch7-ex2, exercise=TRUE, exercise.lines=20}
-# A single-row ARD dataframe
-ard_row <- tibble(
-  group1 = "TRT01A",
-  group1_level = "Placebo",
-  variable = "AGE",
-  stat_name = "mean",
-  stat = list(75.21),
-  stat_fmt = "75.2"
-)
+```{r ch7-ex2, exercise=TRUE, exercise.lines=16}
+# 1. Convert base_table to flextable
+my_flex <- as_flex_table(base_table)
 
-# Complete the mapper function
-map_row_to_ars <- function(row) {
-  list(
-    operationId = row$stat_name,
-    resultGroups = list(
-      list(
-        groupingId = row$___,      # group1
-        groupId = row$___          # group1_level
-      )
-    ),
-    rawValue = row$stat[[1]],
-    formattedValue = row$___       # stat_fmt
-  )
-}
+# 2. Define a landscape section property with custom margins
+# Hint: prop_section(page_size = page_size(orient = "landscape"), page_margins = page_mar(bottom = 1, top = 1, right = 1, left = 1))
+my_section <- ___
 
-# Run mapper
-map_row_to_ars(ard_row)
+# 3. Save as docx (Note: we cannot actually write files to your hard drive in this web tutorial, so we just return the code you would use!)
+# save_as_docx(my_flex, path = "table_14_1_1.docx", pr_section = my_section)
+my_section
 ```
 
 ```{r ch7-ex2-hint-1}
-# Map group1 to groupingId, group1_level to groupId, and stat_fmt to formattedValue
+# my_section <- prop_section(
+#   page_size = page_size(orient = "landscape"),
+#   page_margins = page_mar(bottom = 1, top = 1, right = 1, left = 1)
+# )
 ```
 
 ```{r ch7-ex2-solution}
-map_row_to_ars <- function(row) {
-  list(
-    operationId = row$stat_name,
-    resultGroups = list(
-      list(
-        groupingId = row$group1,
-        groupId = row$group1_level
-      )
-    ),
-    rawValue = row$stat[[1]],
-    formattedValue = row$stat_fmt
-  )
-}
-map_row_to_ars(ard_row)
+my_flex <- as_flex_table(base_table)
+
+my_section <- prop_section(
+  page_size = page_size(orient = "landscape"),
+  page_margins = page_mar(bottom = 1, top = 1, right = 1, left = 1)
+)
+
+my_section
 ```
 
 ```{r ch7-ex2-check}
 grade_result(
-  pass_if(~ .result$operationId == "mean" && .result$resultGroups[[1]]$groupId == "Placebo", "Superb! You mapped the flat ARD row to the CDISC ARS logical schema. This row can now be serialized directly as compliance-conformant JSON for submission!"),
-  fail_if(~ TRUE, "Ensure you are pulling row$group1, row$group1_level, and row$stat_fmt inside the function.")
+  pass_if(~ inherits(.result, "prop_section"), "Perfect! You now know how to enforce landscape mode and 1-inch margins on your exported tables."),
+  fail_if(~ TRUE, "Make sure you assigned a valid prop_section() to my_section.")
 )
 ```
 
@@ -198,20 +161,19 @@ quiz(
   caption = "Chapter 7 — Check Your Understanding",
 
   question(
-    "How do you pass a custom statistic function to `ard_continuous()`?",
-    answer("Write a new R package"),
-    answer("Pass a named list of functions to the `statistics` argument", correct = TRUE),
-    answer("Pass it to the `fmt_fn` argument"),
-    answer("You cannot calculate custom statistics in `{cards}`"),
+    "Which package is responsible for defining document-level properties like Landscape orientation and page margins?",
+    answer("gtsummary"),
+    answer("cards"),
+    answer("flextable"),
+    answer("officer", correct = TRUE),
     allow_retry = TRUE
   ),
 
   question(
-    "Which CDISC ARS object directly corresponds to a row of flat `{cards}` ARD containing a calculated value?",
-    answer("AnalysisSet"),
-    answer("OperationResult", correct = TRUE),
-    answer("OutputDisplay"),
-    answer("WhereClause"),
+    "How do you pass a layout specification to `save_as_docx()`?",
+    answer("Using the `pr_section` argument", correct = TRUE),
+    answer("Using the `layout` argument"),
+    answer("Piping the table into `prop_section()`"),
     allow_retry = TRUE
   )
 )
@@ -221,9 +183,9 @@ quiz(
 
 ## Chapter 7 Summary {.congratulations}
 
-You now know how to:
-- Write and integrate **custom continuous statistics** functions in `{cards}`.
-- Map flat ARD columns directly to CDISC ARS **`OperationResult`** JSON specifications.
-- Understand the automated quality control benefits of standardized results metadata.
+You now know:
+- **`as_flex_table()`**: Bridges `{gtsummary}` to the MS Word ecosystem.
+- **`add_header_lines()` / `add_footer_lines()`**: Injects protocol metadata directly into the top and bottom of the table object.
+- **`prop_section()`**: Defines strict document layouts (landscape vs portrait) and margins using the `{officer}` engine.
 
-**Congratulations!** You have completed the `{cards}` & `{cardx}` interactive training curriculum!
+**Next:** Chapter 8 — Advanced Workflows (Writing custom statistics and mapping to CDISC ARS JSON)

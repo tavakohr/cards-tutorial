@@ -2,7 +2,7 @@
 
 > Hands-on **learnr** tutorial covering `{cards}` and `{cardx}` R packages — from basic continuous/categorical summaries to regression modeling with `{broom}` and `{parameters}`, with live exercises on real **pharmaverse** datasets.
 
-A seven-chapter interactive course that takes a clinical R programmer from "what is Analysis Results Data (ARD)?" all the way to writing custom statistics, handling model tidying, and mapping flat ARD records directly to the CDISC ARS JSON schema.
+An eight-chapter interactive course that takes a clinical R programmer from "what is Analysis Results Data (ARD)?" all the way to writing custom statistics, handling model tidying, and mapping flat ARD records directly to the CDISC ARS JSON schema.
 
 Every chapter mixes narrative theory with **runnable code exercises** (graded with `{gradethis}`) and **knowledge-check quizzes**. All exercises use real pharmaverse ADaM datasets (`adsl`, `adtte`) and a sample ARD JSON file (`data/adsl_demog_ard.json`).
 
@@ -26,7 +26,8 @@ Every chapter mixes narrative theory with **runnable code exercises** (graded wi
 | 4 | [Extended Stats with `{cardx}`](cards_tutorial_ch4.Rmd) | Generating ARDs for hypothesis tests (t-tests, Fisher's exact, CMH) and Kaplan-Meier survival analysis. |
 | 5 | [Models, `{broom}`, and `{parameters}`](cards_tutorial_ch5.Rmd) | Slicing complex R model objects; the roles of `{broom}` and `{parameters}`; generating regression ARDs with `ard_regression()`. |
 | 6 | [Consuming ARD](cards_tutorial_ch6.Rmd) | Passing pre-calculated ARDs to downstream rendering tools like `{gtsummary}` (`tbl_ard_summary()`) and `{rtables}`. |
-| 7 | [Advanced Workflows](cards_tutorial_ch7.Rmd) | Implementing custom statistics (geometric mean/CV); mapping flat ARD columns directly to CDISC ARS `OperationResult` structures. |
+| 7 | [Exporting and MS Word Styling](cards_tutorial_ch7.Rmd) | Bridging gtsummary to MS Word using flextable and officer; managing clinical page layouts, margins, and headers. |
+| 8 | [Advanced Workflows](cards_tutorial_ch8.Rmd) | Implementing custom statistics (geometric mean/CV); mapping flat ARD columns directly to CDISC ARS `OperationResult` structures. |
 
 The original chapter study materials live in [`materials/`](materials/).
 
@@ -94,8 +95,8 @@ cards_tutorial/
 ├── cards_tutorial_ch3.Rmd      ← Chapter 3: Stacking and Formatting
 ├── cards_tutorial_ch4.Rmd      ← Chapter 4: Extended Stats with cardx
 ├── cards_tutorial_ch5.Rmd      ← Chapter 5: Models, broom, and parameters
-├── cards_tutorial_ch6.Rmd      ← Chapter 6: Consuming ARD
-├── cards_tutorial_ch7.Rmd      ← Chapter 7: Advanced Workflows
+├── cards_tutorial_ch7.Rmd      ← Chapter 7: Exporting and MS Word Styling
+├── cards_tutorial_ch8.Rmd      ← Chapter 8: Advanced Workflows
 │
 ├── data/
 │   └── adsl_demog_ard.json     ← Sample flat ARD JSON
@@ -111,10 +112,11 @@ cards_tutorial/
 │   ├── 04_Extended_Stats_with_Cardx.md
 │   ├── 05_Models_Broom_and_Parameters.md
 │   ├── 06_Consuming_ARD.md
-│   ├── 07_Advanced_Workflows.md
-│   ├── 08_ARD_Structure_Reference.md
-│   ├── 09_Broom_vs_Parameters_Tidiers.md
-│   └── 10_Common_Custom_Functions.md
+│   ├── 07_Flextable_Export.md
+│   ├── 08_Advanced_Workflows.md
+│   ├── 09_ARD_Structure_Reference.md
+│   ├── 10_Broom_vs_Parameters_Tidiers.md
+│   └── 11_Common_Custom_Functions.md
 │
 ├── setup_renv.R                ← Renv initialization script
 ├── renv.lock                   ← Renv locked dependencies file

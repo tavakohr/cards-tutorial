@@ -1,6 +1,6 @@
 # Chapter 7 — Advanced Workflows
 
-## 7.1 Custom Statistics in `{cards}`
+## 8.1 Custom Statistics in `{cards}`
 
 While `{cards}` provides a comprehensive set of default summary statistics, clinical study protocols often require custom calculations (e.g. geometric mean, geometric coefficient of variation, specific percentiles, or custom confidence intervals).
 
@@ -48,7 +48,7 @@ By adding these custom statistics, the resulting ARD will contain rows with `sta
 
 ---
 
-## 7.2 Mapping ARD to CDISC ARS
+## 8.2 Mapping ARD to CDISC ARS
 
 One of the key motivations for using `{cards}` ARD is its close alignment with the **CDISC Analysis Results Standard (ARS)**. 
 
@@ -88,7 +88,7 @@ This direct relationship is why `{cards}` has been adopted as the primary calcul
 
 ---
 
-## 7.3 Traceability Auditing
+## 8.3 Traceability Auditing
 
 Because ARD maintains the explicit mapping above, we can write programmatic auditors to verify the integrity of our clinical trial summaries:
 
@@ -99,7 +99,7 @@ This level of automated quality control is impossible when results are trapped i
 
 ---
 
-## Chapter 7 Summary
+## Chapter 8 Summary
 
 - **Custom statistics** are implemented by passing a named list of functions to the `statistics` argument in `ard_continuous()`.
 - `{cards}` ARD columns map directly to the CDISC ARS **`OperationResult`** JSON structure, where `group1_level` corresponds to `groupId`, `stat_name` maps to `operationId`, and raw/formatted values map to `rawValue`/`formattedValue`.
