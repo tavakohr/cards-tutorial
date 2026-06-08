@@ -116,7 +116,7 @@ ard_results <- ard_continuous(
       ci_high = function(x) mean_ci_upper(x, conf.level = 0.95)
     )
   ),
-  fmt_fn = list(
+  fmt_fun = list(
     AGE = list(
       n = 0,
       mean = 1,

@@ -67,7 +67,7 @@ ard_custom <- ard_continuous(
       gmean = ___
     )
   ),
-  fmt_fn = list(
+  fmt_fun = list(
     AGE = list(
       gmean = 1
     )
@@ -99,7 +99,7 @@ ard_custom <- ard_continuous(
       gmean = geom_mean
     )
   ),
-  fmt_fn = list(
+  fmt_fun = list(
     AGE = list(
       gmean = 1
     )
@@ -201,7 +201,7 @@ quiz(
     "How do you pass a custom statistic function to `ard_continuous()`?",
     answer("Write a new R package"),
     answer("Pass a named list of functions to the `statistic` argument", correct = TRUE),
-    answer("Pass it to the `fmt_fn` argument"),
+    answer("Pass it to the `fmt_fun` argument"),
     answer("You cannot calculate custom statistics in `{cards}`"),
     allow_retry = TRUE
   ),

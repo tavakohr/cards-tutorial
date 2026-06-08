@@ -53,15 +53,15 @@ ard_cmh_test(
 
 Univariate tests and modeling functions in `{cardx}` return multiple statistic types (like p-values, test statistics, confidence intervals). Standardizing how these statistics display is controlled at two different points in the pipeline:
 
-### A. During Calculation (using `fmt_fn`)
-When running a test, you can supply a named list to the `fmt_fn` argument. This maps a specific statistic to either an integer (number of decimal places) or a custom formatting function:
+### A. During Calculation (using `fmt_fun`)
+When running a test, you can supply a named list to the `fmt_fun` argument. This maps a specific statistic to either an integer (number of decimal places) or a custom formatting function:
 
 ```r
 ard_stats_t_test(
   data = adsl_2groups, 
   variables = AGE, 
   by = TRT01A,
-  fmt_fn = list(p.value = 3, estimate = 1)
+  fmt_fun = list(p.value = 3, estimate = 1)
 )
 ```
 

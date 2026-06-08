@@ -76,7 +76,7 @@ ard_age_fmt <- ard_continuous(
   data = adsl,
   variables = AGE,
   .by = TRT01A,
-  fmt_fn = list(
+  fmt_fun = list(
     # n gets 0 decimals
     AGE = list(
       n = 0,
@@ -88,7 +88,7 @@ ard_age_fmt <- ard_continuous(
 )
 ```
 
-By specifying `fmt_fn` at the calculation step, you ensure that the formatting rules are bound to the raw statistics, making the ARD object fully self-contained.
+By specifying `fmt_fun` at the calculation step, you ensure that the formatting rules are bound to the raw statistics, making the ARD object fully self-contained.
 
 ---
 
@@ -126,6 +126,6 @@ ard_flat_fmt_only <- ard_age_fmt %>%
 
 - **`bind_ard()`** binds separate ARD tables, validating that no duplicate analysis results are created unless `replace = TRUE` is explicitly set.
 - **`ard_stack()`** is a high-level wrapper to run continuous and categorical functions in one command.
-- **Formatting** is defined via `fmt_fn` (which can take decimal integers, custom formatting functions, or template strings) and is stored directly in the `stat_fmt` column.
+- **Formatting** is defined via `fmt_fun` (which can take decimal integers, custom formatting functions, or template strings) and is stored directly in the `stat_fmt` column.
 - **`unlist_ard_columns()`** is used to flatten list-columns (like `stat_fmt`) to standard vectors safely, replacing `NULL` values with `NA` to avoid vector length errors.
 - Separating calculation-stage formatting from downstream display layout keeps the workflow robust and auditable.

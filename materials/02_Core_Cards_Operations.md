@@ -11,7 +11,7 @@ ard_continuous(
   variables,
   by = NULL,
   statistics = NULL,
-  fmt_fn = NULL
+  fmt_fun = NULL
 )
 ```
 

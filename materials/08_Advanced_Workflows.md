@@ -34,7 +34,7 @@ ard_custom <- ard_continuous(
       gcv = geom_cv
     )
   ),
-  fmt_fn = list(
+  fmt_fun = list(
     AGE = list(
       n = 0,
       gmean = 1,

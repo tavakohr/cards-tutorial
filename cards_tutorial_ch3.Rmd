@@ -9,7 +9,7 @@ output:
     css: www/custom.css
 runtime: shiny_prerendered
 description: >
-  Master combining multiple ARD objects using bind_ard and customizing decimal formats with fmt_fn in cards.
+  Master combining multiple ARD objects using bind_ard and customizing decimal formats with fmt_fun in cards.
 ---
 
 ```{r setup, include=FALSE}
@@ -59,7 +59,7 @@ Clinical standards dictate the exact number of decimal places for each statistic
 - Means and Medians are formatted to 1 decimal place.
 - Standard deviations (`sd`) are formatted to 2 decimal places.
 
-In `{cards}`, you specify these rules using the `fmt_fn` argument when calculating the ARD. The formatted string is generated in the `stat_fmt` column after calling `apply_fmt_fun()`.
+In `{cards}`, you specify these rules using the `fmt_fun` argument when calculating the ARD. The formatted string is generated in the `stat_fmt` column after calling `apply_fmt_fun()`.
 
 - **`unlist_ard_columns()`**: Because `stat` and `stat_fmt` are list-columns, they can be difficult to work with in standard tables. `{cards}` provides `unlist_ard_columns()` to cleanly flatten these columns into standard vectors. By default, it replaces any `NULL` elements with `NA` (preventing standard R `unlist()` errors where `NULL`s are dropped and row counts mismatch). You can target specific columns by calling `unlist_ard_columns(columns = stat_fmt)`.
 
@@ -110,13 +110,13 @@ Calculate continuous summaries for `AGE` grouped by `TRT01A`, but apply custom f
 
 ``` {r ch3-ex2, exercise=TRUE, exercise.lines=15}
 # Generate continuous summaries with custom formatting rules
-# Hint: pass a nested list to fmt_fn mapping stat_names to decimal integers
+# Hint: pass a nested list to fmt_fun mapping stat_names to decimal integers
 
 ard_age_fmt <- ard_continuous(
   data = adsl,
   variables = AGE,
   by = TRT01A,
-  fmt_fn = list(
+  fmt_fun = list(
     AGE = list(
       n = ___,
       mean = ___,
@@ -134,7 +134,7 @@ ard_age_fmt %>%
 
 ``` {r ch3-ex2-hint-1}
 # Set n = 0, mean = 1, sd = 2
-# fmt_fn = list(AGE = list(n = 0, mean = 1, sd = 2))
+# fmt_fun = list(AGE = list(n = 0, mean = 1, sd = 2))
 ```
 
 ``` {r ch3-ex2-solution}
@@ -142,7 +142,7 @@ ard_continuous(
   data = adsl,
   variables = AGE,
   by = TRT01A,
-  fmt_fn = list(
+  fmt_fun = list(
     AGE = list(
       n = 0,
       mean = 1,
@@ -158,7 +158,7 @@ ard_continuous(
 ``` {r ch3-ex2-check}
 grade_result(
   pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && .result$stat_fmt[.result$stat_name == "mean"][[1]] == "74.4", "Awesome! You customized the decimals and applied the formatting function to generate the stat_fmt column."),
-  fail_if(~ TRUE, "Double-check your nested list structure in fmt_fn: list(AGE = list(n = 0, mean = 1, sd = 2)) and verify you use apply_fmt_fun() and select(variable, stat_name, stat_fmt).")
+  fail_if(~ TRUE, "Double-check your nested list structure in fmt_fun: list(AGE = list(n = 0, mean = 1, sd = 2)) and verify you use apply_fmt_fun() and select(variable, stat_name, stat_fmt).")
 )
 ```
 
@@ -206,6 +206,6 @@ quiz(
 You now know:
 - How to stack multiple ARD data frames using **`bind_ard()`**.
 - How `bind_ard()` protects against data duplication.
-- How to configure decimal places and formatting rules using the **`fmt_fn`** list inside calculation functions.
+- How to configure decimal places and formatting rules using the **`fmt_fun`** list inside calculation functions.
 
 **Next:** Chapter 4 — Extended Stats with `{cardx}` (Hypothesis tests and Kaplan-Meier curves)
