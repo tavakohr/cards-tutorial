@@ -49,7 +49,37 @@ ard_cmh_test(
 
 ---
 
-## 4.3 Survival Analysis (`ard_survival_survfit`)
+## 4.3 Formatting Statistics in `{cardx}`
+
+Univariate tests and modeling functions in `{cardx}` return multiple statistic types (like p-values, test statistics, confidence intervals). Standardizing how these statistics display is controlled at two different points in the pipeline:
+
+### A. During Calculation (using `fmt_fn`)
+When running a test, you can supply a named list to the `fmt_fn` argument. This maps a specific statistic to either an integer (number of decimal places) or a custom formatting function:
+
+```r
+ard_stats_t_test(
+  data = adsl_2groups, 
+  variables = AGE, 
+  by = TRT01A,
+  fmt_fn = list(p.value = 3, estimate = 1)
+)
+```
+
+### B. Post-Calculation (using `update_ard_fmt_fun()`)
+If you have an already-calculated ARD and want to modify its formatting functions before printing, you can update them using `update_ard_fmt_fun()`:
+
+```r
+ard_ttest %>%
+  update_ard_fmt_fun(p.value = 4) %>%  # Change p-value format to 4 decimals
+  apply_fmt_fun()
+```
+
+### The Rendering Step: `apply_fmt_fun()`
+No matter how formatting rules are defined, the raw `{cardx}` output does not contain the formatted string column (`stat_fmt`) by default. You must pipe the ARD object through **`apply_fmt_fun()`** to generate the rounded text representations for display.
+
+---
+
+## 4.4 Survival Analysis (`ard_survival_survfit`)
 
 In oncology and cardiovascular studies, time-to-event endpoints are standard. The Kaplan-Meier (KM) survival curve estimates survival rates over time.
 

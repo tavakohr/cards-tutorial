@@ -55,6 +55,28 @@ Key statistical test functions include:
 - `ard_cmh_test()`: Cochran-Mantel-Haenszel test.
 - `ard_survival_survfit()`: Extract Kaplan-Meier survival estimates at specific time points.
 
+### 4.2 Formatting Statistics in cardx
+
+Statistical test functions in `{cardx}` return multiple values (e.g., test statistics, confidence intervals, p-values). Formatting these values is managed in two ways:
+
+1. **`apply_fmt_fun()`**: This function reads the formatting rules defined in the `fmt_fn` column of the ARD, applies them to the raw values in the `stat` column, and appends the **`stat_fmt`** column (which holds the display text).
+2. **Modifying formatting rules:**
+   - **During Calculation:** You can pass a named list to the `fmt_fn` argument mapping statistics to decimal integers or custom formatting functions:
+     ```r
+     ard_stats_t_test(
+       data = adsl_2groups, 
+       variables = AGE, 
+       by = TRT01A,
+       fmt_fn = list(p.value = 3, estimate = 1)
+     )
+     ```
+   - **Post-Calculation:** You can modify the formatting rules of an already-computed ARD using **`update_ard_fmt_fun()`** before you call `apply_fmt_fun()`:
+     ```r
+     ard_ttest %>%
+       update_ard_fmt_fun(p.value = 4) %>%  # Change p-value format to 4 decimals
+       apply_fmt_fun()
+     ```
+
 ---
 
 ## Exercise 4.1 — Perform a Two-Sample t-test
