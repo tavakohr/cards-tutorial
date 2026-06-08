@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 6: Consuming ARD"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.2
+  version: 1.3
 output:
   learnr::tutorial:
     progressive: true
@@ -11,7 +11,7 @@ output:
     css: www/custom.css
 runtime: shiny_prerendered
 description: >
-  Learn how to build formatted tables from pre-calculated ARDs using gtsummary and other downstream reporting engines.
+  Learn how to build formatted tables from pre-calculated ARDs using gtsummary, apply global themes, modify aesthetics, and export clinical tables.
 ---
 
 ```{r setup, include=FALSE}
@@ -23,6 +23,7 @@ library(dplyr)
 library(cards)
 library(cardx)
 library(gtsummary)
+library(flextable)
 library(jsonlite)
 library(glue)
 
@@ -33,6 +34,14 @@ gradethis_setup()
 
 # Load datasets
 data("adsl",  package = "pharmaverseadam")
+
+# Pre-compute an ARD for downstream exercises to save time
+ard_demog_pre <- ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by = TRT01A
+)
 ```
 
 ---
@@ -95,6 +104,129 @@ grade_result(
 
 ---
 
+## Exercise 6.2 — Apply a Global Theme
+
+`{gtsummary}` comes with built-in themes that automatically adjust padding, borders, and typography to meet specific journal guidelines (like JAMA or NEJM) or layout needs (like a compact view).
+
+You must call the theme function **before** creating the table.
+
+```{r ch6-ex2, exercise=TRUE, exercise.lines=15}
+# Set the global theme to "jama" (Journal of the American Medical Association)
+# Hint: Call theme_gtsummary_journal("jama")
+
+___
+
+# Render the table (we use ard_demog_pre which was pre-calculated for you)
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A
+)
+```
+
+```{r ch6-ex2-hint-1}
+# Call theme_gtsummary_journal("jama") at the top of the block.
+```
+
+```{r ch6-ex2-solution}
+theme_gtsummary_journal("jama")
+
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A
+)
+```
+
+```{r ch6-ex2-check}
+grade_result(
+  pass_if(~ inherits(.result, "gtsummary"), "Great job! Setting a theme changes global aesthetics instantly without touching the underlying statistical data."),
+  fail_if(~ TRUE, "Ensure you called theme_gtsummary_journal(\"jama\") before rendering.")
+)
+```
+
+---
+
+## Exercise 6.3 — Modify Table Aesthetics
+
+You can pipe `tbl_ard_summary()` into various modifier functions to change table headers, add spanning titles, or bold variables.
+
+Modify the table below by bolding the variable labels and adding a spanning header over the statistic columns.
+
+```{r ch6-ex3, exercise=TRUE, exercise.lines=15}
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A
+) %>%
+  # Bold the row labels (AGE, SEX)
+  ___() %>%
+  # Add a spanning header over the columns
+  # Hint: use modify_spanning_header(all_stat_cols() ~ "**Treatment Group**")
+  ___
+```
+
+```{r ch6-ex3-hint-1}
+# Call bold_labels() %>% modify_spanning_header(all_stat_cols() ~ "**Treatment Group**")
+```
+
+```{r ch6-ex3-solution}
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A
+) %>%
+  bold_labels() %>%
+  modify_spanning_header(all_stat_cols() ~ "**Treatment Group**")
+```
+
+```{r ch6-ex3-check}
+grade_result(
+  pass_if(~ inherits(.result, "gtsummary"), "Beautiful! Using modifiers is safe and fast because it strictly formats the presentation layer."),
+  fail_if(~ TRUE, "Check that you called bold_labels() and modify_spanning_header().")
+)
+```
+
+---
+
+## Exercise 6.4 — Exporting the Table
+
+Clinical tables need to be exported to Microsoft Word, RTF, or PDF. `{gtsummary}` integrates seamlessly with the `{flextable}` package for Word outputs.
+
+```{r ch6-ex4, exercise=TRUE, exercise.lines=12}
+# 1. Create the base table
+my_table <- tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A
+)
+
+# 2. Convert to flextable
+# Hint: Pipe my_table into as_flex_table()
+flex_out <- ___
+
+# Display the flextable (in practice, you'd pipe this into flextable::save_as_docx())
+flex_out
+```
+
+```{r ch6-ex4-hint-1}
+# flex_out <- my_table %>% as_flex_table()
+```
+
+```{r ch6-ex4-solution}
+flex_out <- my_table %>% as_flex_table()
+flex_out
+```
+
+```{r ch6-ex4-check}
+grade_result(
+  pass_if(~ inherits(.result, "flextable"), "Success! Converting to a flextable object is the final step before exporting to .docx."),
+  fail_if(~ TRUE, "Ensure you pipe my_table into as_flex_table().")
+)
+```
+
+---
+
 ## Chapter 6 Knowledge Check
 
 ```{r ch6-quiz, echo=FALSE}
@@ -118,13 +250,13 @@ quiz(
     answer("It merges R and SAS codebases"),
     allow_retry = TRUE
   ),
-
+  
   question(
-    "Which pharmaverse package is a powerful layout engine used for complex, nested clinical tables (like AE SOC/PT tables)?",
-    answer("ggplot2"),
-    answer("rtables", correct = TRUE),
-    answer("gtsummary"),
-    answer("datasetjson"),
+    "How do you export a `{gtsummary}` table to Microsoft Word?",
+    answer("Pipe it into write.csv()"),
+    answer("Pipe it into as_flex_table() and use save_as_docx()", correct = TRUE),
+    answer("Use export_word()"),
+    answer("Print it and copy-paste"),
     allow_retry = TRUE
   )
 )
@@ -136,7 +268,9 @@ quiz(
 
 You now know:
 - The advantages of the **Separation of Concerns** paradigm in clinical reporting.
-- How to pass pre-calculated ARD objects to **`tbl_ard_summary()`** in `{gtsummary}`.
-- The role of **`{rtables}`** as a layout engine that consumes ARDs to build nested clinical tables.
+- How `{gtsummary}` maps ARD variables and stats to rows and columns natively.
+- How to apply global themes using **`theme_gtsummary_*()`**.
+- How to format tables dynamically using modifiers like **`modify_spanning_header()`**.
+- How to export tables using **`as_flex_table()`**.
 
 **Next:** Chapter 7 — Advanced Workflows (Writing custom stats and mapping to CDISC ARS JSON)

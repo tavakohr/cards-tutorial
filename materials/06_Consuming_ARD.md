@@ -14,7 +14,7 @@ By using Analysis Results Data (ARD) as a middle layer, we enforce a strict sepa
       │
       ├───────────────────────┐
       ▼                       ▼  (Presentation Phase: `{gtsummary}` / `{rtables}`)
-  HTML Table              RTF Table
+  HTML Table              Word/RTF Table
 ```
 
 ### Advantages of the ARD Middle Layer:
@@ -24,13 +24,24 @@ By using Analysis Results Data (ARD) as a middle layer, we enforce a strict sepa
 
 ---
 
-## 6.2 Consuming ARD with `{gtsummary}`
+## 6.2 How an ARD Transforms to `{gtsummary}`
 
-The `{gtsummary}` package is one of the most popular packages for clinical and scientific table generation in R. In recent versions, `{gtsummary}` has been re-engineered to use the ARD schema as its core data model.
+The `{gtsummary}` package has been re-engineered to use the ARD schema as its core data model. 
 
-When you call `tbl_summary()` in `{gtsummary}`, it runs `{cards}` functions under the hood to build an ARD, and then renders the table. However, you can also bypass `tbl_summary()`'s internal calculations and pass a pre-computed ARD directly to **`tbl_ard_summary()`**.
+When you pass an ARD to **`tbl_ard_summary()`**, `{gtsummary}` queries the ARD object to construct the table:
+1. **Row Creation:** It reads the `variable` and `variable_level` columns to generate the table's rows and indented sub-rows.
+2. **Column Creation:** It reads the grouping variables (e.g., `group1_level`) to generate the table columns (e.g., Treatment A, Treatment B).
+3. **Cell Population:** It reads the `stat_name` (e.g., `"mean"`) and pulls the pre-formatted display text directly from the `stat_fmt` column. 
 
-### Example: Demographics Table
+Because `tbl_ard_summary()` does not run any calculations itself, it executes instantly.
+
+---
+
+## 6.3 Comprehensive `{gtsummary}` Workflows
+
+Once the table is generated, you can style, format, and export it.
+
+### 1. Generating the Base Table
 ```r
 library(gtsummary)
 library(cards)
@@ -43,28 +54,80 @@ ard_data <- ard_stack(
   .by = TRT01A
 )
 
-# 2. Render the table using the pre-computed ARD
-table_demog <- tbl_ard_summary(
+# 2. Render the base table using the pre-computed ARD
+base_table <- tbl_ard_summary(
   cards = ard_data,
-  .by = TRT01A,
+  by = TRT01A,
   include = c(AGE, SEX, RACE)
 ) %>%
-  add_overall() %>%
-  modify_header(label = "**Demographic Characteristic**") %>%
-  modify_caption("Table 14.1.1: Demographic Characteristics")
+  add_overall()
 ```
 
-Because `tbl_ard_summary()` does not run any calculations itself, it executes instantly. If you need to change the table header, footnote, or caption, you simply re-run the `tbl_ard_summary` block, which takes milliseconds.
+### 2. Setting Global Themes
+Before generating your table, you can set a global theme to adhere to specific journal or organizational standards. Themes automatically adjust padding, borders, and number formatting.
+
+```r
+# Apply a compact theme (reduces padding, good for large tables)
+theme_gtsummary_compact()
+
+# Apply a journal-specific theme (e.g., JAMA, Lancet, NEJM)
+theme_gtsummary_journal("jama")
+
+# Reset to default
+reset_gtsummary_theme()
+```
+
+### 3. Aesthetic Modifiers
+`{gtsummary}` provides a suite of modifier functions to change table text, headers, and footnotes instantly.
+
+```r
+styled_table <- base_table %>%
+  # Modify main column headers (use markdown ** for bold)
+  modify_header(
+    label = "**Demographic Characteristic**",
+    all_stat_cols() ~ "**{level}**  \n(N = {n})"
+  ) %>%
+  # Add a spanning header over all statistic columns
+  modify_spanning_header(all_stat_cols() ~ "**Treatment Group**") %>%
+  # Add footnotes
+  modify_footnote(all_stat_cols() ~ "Data collected at baseline.") %>%
+  modify_caption("Table 14.1.1: Demographic Characteristics") %>%
+  # Bold the variable names (AGE, SEX)
+  bold_labels() %>%
+  # Italicize the variable levels (Male, Female)
+  italicize_levels()
+```
+
+### 4. Exporting the Table
+Clinical outputs are rarely delivered as R consoles or interactive HTMLs. `{gtsummary}` tables can be easily exported using external rendering engines.
+
+**To Microsoft Word (via `{flextable}`):**
+```r
+library(flextable)
+
+styled_table %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "table_14_1_1.docx")
+```
+
+**To RTF or HTML (via `{gt}`):**
+```r
+library(gt)
+
+styled_table %>%
+  as_gt() %>%
+  gtsave(filename = "table_14_1_1.rtf")
+```
 
 ---
 
-## 6.3 Consuming ARD with `{rtables}`
+## 6.4 Consuming ARD with `{rtables}`
 
-`{rtables}` is a powerful layout engine developed by Roche (Insights Engineering) specifically for generating complex, multi-level clinical tables (like adverse event tables with nested SOC/PT rows, or complex efficacy tables).
+While `{gtsummary}` is excellent for standard summaries and regressions, `{rtables}` is a powerful layout engine developed by Roche (Insights Engineering) specifically for generating complex, multi-level clinical tables (like adverse event tables with nested SOC/PT rows).
 
 `{rtables}` uses a grid-based layout specification. It has direct integrations to build table cells by reading values from `{cards}` ARD objects:
 - You define the grid layout (columns, rows, nesting).
-- You populate the cells by querying the ARD object (using columns like `group1_level`, `variable`, `stat_name`, and `stat`).
+- You populate the cells by querying the ARD object's `stat_fmt` column.
 - `{rtables}` handles the text wrapping, column widths, page breaks, and rendering to text, RTF, or PDF formats.
 
 This makes ARD the universal exchange format across the entire pharmaverse reporting ecosystem.
@@ -73,7 +136,7 @@ This makes ARD the universal exchange format across the entire pharmaverse repor
 
 ## Chapter 6 Summary
 
-- **Separation of calculation and display** means statistical calculations are executed once, and rendering is performed downstream.
-- **`{gtsummary}`** provides **`tbl_ard_summary()`**, which consumes a pre-computed ARD data frame to render standard clinical tables instantly.
-- **`{rtables}`** uses ARD as an input source to populate complex, multi-level clinical trial tables.
-- Downstream rendering engines query the ARD's `stat_fmt` for display text and `stat` for raw values, ensuring consistency and auditability.
+- **Separation of Concerns:** Calculate once in `{cards}`, render multiple times downstream.
+- **Internal Mapping:** `{gtsummary}` builds rows from `variable_level`, columns from `group1_level`, and populates cells using `stat_fmt`.
+- **Theming & Styling:** Use `theme_gtsummary_*()` globally, and `modify_*()` functions on the pipeline to control aesthetics.
+- **Exporting:** Convert to `{flextable}` for Word (`.docx`), or `{gt}` for RTF/HTML outputs.
