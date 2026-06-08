@@ -51,7 +51,7 @@ If an ARD contains duplicate rows, downstream reporting tools (like `{gtsummary}
 
 ## 3.3 Formatting Stats (`ard_fmt_args`)
 
-While `stat_value` contains the full-precision numeric value (e.g. `74.38095`), the `stat_value_fmt` column contains the display string. By default, `{cards}` applies standard decimal rules. However, clinical studies have strict formatting requirements (e.g. "Mean should have 1 decimal place; SD should have 2 decimal places").
+While `stat` contains the full-precision numeric value (e.g. `74.38095`), the `stat_fmt` column contains the display string. By default, `{cards}` applies standard decimal rules. However, clinical studies have strict formatting requirements (e.g. "Mean should have 1 decimal place; SD should have 2 decimal places").
 
 You can control formatting using `ard_fmt_args()` or by passing formatting arguments to your ARD generation function.
 
@@ -87,5 +87,5 @@ By specifying `fmt_fn` at the calculation step, you ensure that the formatting r
 
 - **`bind_ard()`** binds separate ARD tables, validating that no duplicate analysis results are created unless `replace = TRUE` is explicitly set.
 - **`ard_stack()`** is a high-level wrapper to run continuous and categorical functions in one command.
-- **Formatting** is defined via `fmt_fn` (which can take decimal integers, custom formatting functions, or template strings) and is stored directly in the `stat_value_fmt` column.
+- **Formatting** is defined via `fmt_fn` (which can take decimal integers, custom formatting functions, or template strings) and is stored directly in the `stat_fmt` column.
 - Separating calculation-stage formatting from downstream display layout keeps the workflow robust and auditable.

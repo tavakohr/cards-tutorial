@@ -76,7 +76,9 @@ ard_ttest <- ___(
 )
 
 # Look at the statistical results
-ard_ttest %>% select(stat_name, stat_label, stat_value_fmt)
+ard_ttest %>%
+  apply_fmt_fun() %>%
+  select(stat_name, stat_label, stat_fmt)
 ```
 
 ```{r ch4-ex1-hint-1}
@@ -85,13 +87,20 @@ ard_stats_t_test(adsl_2groups, variables = AGE, by = TRT01A)
 ```
 
 ```{r ch4-ex1-solution}
-ard_stats_t_test(adsl_2groups, variables = AGE, by = TRT01A)
+ard_ttest <- ard_stats_t_test(
+  data = adsl_2groups,
+  variables = AGE,
+  by = TRT01A
+)
+ard_ttest %>%
+  apply_fmt_fun() %>%
+  select(stat_name, stat_label, stat_fmt)
 ```
 
 ```{r ch4-ex1-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "p.value" %in% .result$stat_name, "Correct! ard_stats_t_test generated standard test rows including p-value, confidence intervals, and the t-statistic."),
-  fail_if(~ TRUE, "Ensure you are using ard_stats_t_test() on adsl_2groups with variables = AGE and by = TRT01A.")
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result), "Correct! ard_stats_t_test generated standard test rows, and apply_fmt_fun() formatted them into stat_fmt."),
+  fail_if(~ TRUE, "Ensure you are using ard_stats_t_test() on adsl_2groups and selecting the correct columns via apply_fmt_fun().")
 )
 ```
 
@@ -118,7 +127,9 @@ ard_km_rates <- ard_survival_survfit(
 )
 
 # View results
-ard_km_rates %>% select(group1_level, variable_grp_level, stat_name, stat_value_fmt)
+ard_km_rates %>%
+  apply_fmt_fun() %>%
+  select(group1_level, variable_grp_level, stat_name, stat_fmt)
 ```
 
 ```{r ch4-ex2-hint-1}
@@ -126,18 +137,21 @@ ard_km_rates %>% select(group1_level, variable_grp_level, stat_name, stat_value_
 ```
 
 ```{r ch4-ex2-solution}
-ard_survival_survfit(
+ard_km_rates <- ard_survival_survfit(
   data = adtte_os,
   by = TRT01A,
   variables = c(time = "AVAL", event = "1-CNSR"),
   times = c(6, 12)
 )
+ard_km_rates %>%
+  apply_fmt_fun() %>%
+  select(group1_level, variable_grp_level, stat_name, stat_fmt)
 ```
 
 ```{r ch4-ex2-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "survival" %in% .result$stat_name, "Incredible! You generated Kaplan-Meier survival statistics at specified time intervals. These are mapped to rows where variable_grp_level denotes the timepoint (e.g. 6 or 12)."),
-  fail_if(~ TRUE, "Check that you specify times = c(6, 12) in your ard_survival_survfit call.")
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result), "Incredible! You generated Kaplan-Meier survival statistics at specified time intervals. These are mapped to rows where variable_grp_level denotes the timepoint (e.g. 6 or 12)."),
+  fail_if(~ TRUE, "Check that you specify times = c(6, 12) in your ard_survival_survfit call and format the output.")
 )
 ```
 

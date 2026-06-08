@@ -62,7 +62,7 @@ ard_json <- jsonlite::read_json("data/adsl_demog_ard.json")
 
 Traditionally, tables, figures, and listings (TFLs) are rendered directly into formatted PDF or RTF files. If a reviewer needs to run an audit or re-calculate a percentage, they must manually extract numbers from text boxes or recreate the calculation code. 
 
-**Analysis Results Data (ARD)** separates the calculation of numbers from the formatting of those numbers into table layout structures. An ARD is a simple, standardized, flat table where every computed statistic lives on its own row, capturing the raw numeric precision (`stat_value`) alongside its rounded, formatted display string (`stat_value_fmt`).
+**Analysis Results Data (ARD)** separates the calculation of numbers from the formatting of those numbers into table layout structures. An ARD is a simple, standardized, flat table where every computed statistic lives on its own row, capturing the raw numeric precision (`stat`) alongside its rounded, formatted display string (`stat_fmt`).
 
 ---
 
@@ -74,7 +74,7 @@ The `{cards}` package is the foundational tool for generating ARDs in R. Every f
 - `variable`: The variable being summarized (e.g., `AGE`).
 - `variable_grp`, `variable_grp_level`: The categorical variable sub-group and level (e.g., `SEX` and `F`).
 - `stat_name`, `stat_label`: The statistical name (e.g., `mean`) and its display label (e.g., `Mean`).
-- `stat_value`, `stat_value_fmt`: The raw, full-precision statistic (stored in a list-column) and its formatted text representation.
+- `stat`, `stat_fmt`: The raw, full-precision statistic (stored in a list-column) and its formatted text representation.
 
 ---
 
@@ -145,9 +145,9 @@ quiz(
   ),
 
   question(
-    "Why does the ARD store BOTH stat_value and stat_value_fmt?",
-    answer("Because stat_value is for SAS and stat_value_fmt is for R"),
-    answer("stat_value is for double-precision calculations and QC; stat_value_fmt is the formatted text for display", correct = TRUE),
+    "Why does the ARD store BOTH stat and stat_fmt?",
+    answer("Because stat is for SAS and stat_fmt is for R"),
+    answer("stat is for double-precision calculations and QC; stat_fmt is the formatted text for display", correct = TRUE),
     answer("To save space in the R session"),
     answer("They are identical, kept only for backward compatibility"),
     allow_retry = TRUE
@@ -156,8 +156,8 @@ quiz(
   question(
     "Which column in a standard `{cards}` ARD holds the unrounded statistic?",
     answer("stat_name"),
-    answer("stat_value", correct = TRUE),
-    answer("stat_value_fmt"),
+    answer("stat", correct = TRUE),
+    answer("stat_fmt"),
     answer("variable_grp"),
     allow_retry = TRUE
   )
@@ -172,6 +172,6 @@ You now understand:
 - The concept of **Analysis Results Data (ARD)**.
 - Why separating calculations from presentation is essential for automation and quality control.
 - The columns that compose the standard `{cards}` ARD schema.
-- The difference between `stat_value` (raw value in a list-column) and `stat_value_fmt` (formatted character string).
+- The difference between `stat` (raw value in a list-column) and `stat_fmt` (formatted character string).
 
 **Next:** Chapter 2 — Core `{cards}` Operations (`ard_continuous`, `ard_categorical`, etc.)

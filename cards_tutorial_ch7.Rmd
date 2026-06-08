@@ -75,7 +75,9 @@ ard_custom <- ard_continuous(
 )
 
 # Look at the results
-ard_custom %>% select(group1_level, variable, stat_name, stat_value_fmt)
+ard_custom %>%
+  apply_fmt_fun() %>%
+  select(group1_level, variable, stat_name, stat_fmt)
 ```
 
 ```{r ch7-ex1-hint-1}
@@ -87,7 +89,7 @@ geom_mean <- function(x) {
   exp(mean(log(x[x > 0]), na.rm = TRUE))
 }
 
-ard_continuous(
+ard_custom <- ard_continuous(
   data = adsl,
   variables = AGE,
   by = TRT01A,
@@ -102,12 +104,15 @@ ard_continuous(
     )
   )
 )
+ard_custom %>%
+  apply_fmt_fun() %>%
+  select(group1_level, variable, stat_name, stat_fmt)
 ```
 
 ```{r ch7-ex1-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "gmean" %in% .result$stat_name, "Correct! You successfully calculated and formatted a custom statistic. This demonstrates how extensible the `{cards}` package is for non-standard clinical summaries."),
-  fail_if(~ TRUE, "Check that you map gmean = geom_mean inside the nested statistics list.")
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "gmean" %in% .result$stat_name, "Correct! You successfully calculated and formatted a custom statistic. This demonstrates how extensible the `{cards}` package is for non-standard clinical summaries."),
+  fail_if(~ TRUE, "Check that you map gmean = geom_mean inside the nested statistics list and format the output.")
 )
 ```
 
@@ -121,8 +126,8 @@ Write a simple mapper function that takes a single-row ARD dataframe (or list) a
 - `stat_name` -> `operationId`
 - `group1` -> `groupingId`
 - `group1_level` -> `groupId`
-- `stat_value` -> `rawValue`
-- `stat_value_fmt` -> `formattedValue`
+- `stat` -> `rawValue`
+- `stat_fmt` -> `formattedValue`
 
 ```{r ch7-ex2, exercise=TRUE, exercise.lines=20}
 # A single-row ARD dataframe
@@ -131,8 +136,8 @@ ard_row <- tibble(
   group1_level = "Placebo",
   variable = "AGE",
   stat_name = "mean",
-  stat_value = list(75.21),
-  stat_value_fmt = "75.2"
+  stat = list(75.21),
+  stat_fmt = "75.2"
 )
 
 # Complete the mapper function
@@ -145,8 +150,8 @@ map_row_to_ars <- function(row) {
         groupId = row$___          # group1_level
       )
     ),
-    rawValue = row$stat_value[[1]],
-    formattedValue = row$___       # stat_value_fmt
+    rawValue = row$stat[[1]],
+    formattedValue = row$___       # stat_fmt
   )
 }
 
@@ -155,7 +160,7 @@ map_row_to_ars(ard_row)
 ```
 
 ```{r ch7-ex2-hint-1}
-# Map group1 to groupingId, group1_level to groupId, and stat_value_fmt to formattedValue
+# Map group1 to groupingId, group1_level to groupId, and stat_fmt to formattedValue
 ```
 
 ```{r ch7-ex2-solution}
@@ -168,8 +173,8 @@ map_row_to_ars <- function(row) {
         groupId = row$group1_level
       )
     ),
-    rawValue = row$stat_value[[1]],
-    formattedValue = row$stat_value_fmt
+    rawValue = row$stat[[1]],
+    formattedValue = row$stat_fmt
   )
 }
 map_row_to_ars(ard_row)
@@ -178,7 +183,7 @@ map_row_to_ars(ard_row)
 ```{r ch7-ex2-check}
 grade_result(
   pass_if(~ .result$operationId == "mean" && .result$resultGroups[[1]]$groupId == "Placebo", "Superb! You mapped the flat ARD row to the CDISC ARS logical schema. This row can now be serialized directly as compliance-conformant JSON for submission!"),
-  fail_if(~ TRUE, "Ensure you are pulling row$group1, row$group1_level, and row$stat_value_fmt inside the function.")
+  fail_if(~ TRUE, "Ensure you are pulling row$group1, row$group1_level, and row$stat_fmt inside the function.")
 )
 ```
 

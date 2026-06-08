@@ -9,7 +9,7 @@ You can define custom statistics by passing a named list of functions to the `st
 ### Rules for Custom Statistic Functions:
 1. The function must take a numeric vector as its first argument.
 2. The function should handle missing values (`NA`) appropriately.
-3. The function must return a single, scalar value (which will be stored in `stat_value`).
+3. The function must return a single, scalar value (which will be stored in `stat`).
 
 ### Example: Geometric Mean and Coefficient of Variation
 ```r
@@ -60,13 +60,13 @@ In CDISC ARS, the calculated results are stored as a list of **`OperationResult`
 | `group1_level` | `resultGroups[i].groupId` | Identifies the specific group/level (e.g. Placebo) |
 | `variable` | `Analysis.variable` | The variable being analyzed (binds results to the Analysis spec) |
 | `stat_name` | `OperationResult.operationId` | References the operation defined in the AnalysisMethod |
-| `stat_value` | `OperationResult.rawValue` | Unformatted result value (numeric/object) |
-| `stat_value_fmt` | `OperationResult.formattedValue` | Rounded character string displayed in outputs |
+| `stat` | `OperationResult.rawValue` | Unformatted result value (numeric/object) |
+| `stat_fmt` | `OperationResult.formattedValue` | Rounded character string displayed in outputs |
 
 ### JSON Serialization Example:
 A row of a flat ARD:
 ```r
-# group1 = "TRT01A", group1_level = "Placebo", variable = "AGE", stat_name = "mean", stat_value = 75.21, stat_value_fmt = "75.2"
+# group1 = "TRT01A", group1_level = "Placebo", variable = "AGE", stat_name = "mean", stat = 75.21, stat_fmt = "75.2"
 ```
 
 Maps to the following CDISC ARS JSON element inside `Analysis.results`:
@@ -93,7 +93,7 @@ This direct relationship is why `{cards}` has been adopted as the primary calcul
 Because ARD maintains the explicit mapping above, we can write programmatic auditors to verify the integrity of our clinical trial summaries:
 
 1. **Plan vs. Execution Check:** Compare the ARM-TS specification (what analyses were planned) against the generated ARD data frame. We can write an R function to check if there are any planned analyses that are missing from the ARD, or if the ARD contains calculations that were not in the plan (untraced analyses).
-2. **Format-Consistency Check:** Verify that the formatted values in `stat_value_fmt` match the `resultPattern` defined in the ARM-TS. For example, if the plan specifies that the mean should be formatted as `XXX.X`, the auditor checks that the value has exactly one decimal place.
+2. **Format-Consistency Check:** Verify that the formatted values in `stat_fmt` match the `resultPattern` defined in the ARM-TS. For example, if the plan specifies that the mean should be formatted as `XXX.X`, the auditor checks that the value has exactly one decimal place.
 
 This level of automated quality control is impossible when results are trapped inside static RTF or PDF documents.
 

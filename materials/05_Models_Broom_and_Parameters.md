@@ -139,4 +139,4 @@ The resulting ARD will contain rows for each coefficient (`(Intercept)`, `TRT01A
 - **`{broom}`** provides `tidy()` to extract coefficient tables.
 - **`{parameters}`** provides a robust, comprehensive alternative for model parameter extraction.
 - **`{cardx}`** uses **`{broom.helpers}`** to wrap both tidiers, giving a uniform interface `ard_regression()`.
-- **`ard_regression()`** preserves full numeric precision in `stat_value` while generating standard ARD rows for model coefficients, confidence intervals, and significance tests.
+- **`ard_regression()`** preserves full numeric precision in `stat` while generating standard ARD rows for model coefficients, confidence intervals, and significance tests.

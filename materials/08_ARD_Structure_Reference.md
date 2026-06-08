@@ -16,8 +16,8 @@ This supplement serves as a technical reference guide for the standard **Analysi
 | `variable_grp_level`| `any` | The specific category/level being analyzed (e.g., `"M"`, `"WHITE"`). |
 | `stat_name` | `character` | The short machine-readable key for the statistic (e.g., `"mean"`, `"sd"`, `"n"`, `"p"`, `"p.value"`). |
 | `stat_label` | `character` | The human-readable label of the statistic used in display headers (e.g., `"Mean"`, `"SD"`, `"n"`, `"%"`, `"p-value"`). |
-| `stat_value` | `list` | A list-column containing the raw calculated value. Can be numeric, character, or complex objects (like matrices or test summaries). |
-| `stat_value_fmt` | `character` | The display-ready, formatted representation of the statistic (e.g., `"75.2"`). |
+| `stat` | `list` | A list-column containing the raw calculated value. Can be numeric, character, or complex objects (like matrices or test summaries). |
+| `stat_fmt` | `character` | The display-ready, formatted representation of the statistic (e.g., `"75.2"`). |
 | `context` | `character` | The function or package name that generated the row (e.g. `"ard_continuous"`, `"ard_stats_t_test"`, `"ard_survival_survfit"`). |
 
 ---
@@ -28,7 +28,7 @@ This supplement serves as a technical reference guide for the standard **Analysi
 - **`group##`:** Defines the **sub-populations** on which the calculations are independent. For example, if you summarize Age by Treatment Arm, `group1` is `"TRT01A"`, and `group1_level` contains the treatment values. The calculations for "Placebo" and "Xanomeline" are performed independently.
 - **`variable_grp` & `variable_grp_level`:** Defines the **categories within the variable** being summarized. For example, if you summarize the categorical variable `SEX`, `variable` is `"SEX"`, `variable_grp` is `"SEX"`, and `variable_grp_level` contains `"F"` and `"M"`. These represent categories within the same calculation.
 
-### List Columns for `stat_value`:
+### List Columns for `stat`:
 Because R data frames must have a uniform type per column, storing raw results of different types (e.g., `mean` is a decimal number, `n` is an integer, and confidence intervals are numeric vectors of length 2) in a single column requires a **list column**. 
 
 To extract a raw value for a specific row in R:
@@ -36,7 +36,7 @@ To extract a raw value for a specific row in R:
 # Extract the numeric value of the mean
 mean_val <- ard_data %>%
   filter(variable == "AGE", stat_name == "mean") %>%
-  pull(stat_value) %>%
+  pull(stat) %>%
   purrr::pluck(1) # unlists the first element
 ```
 
@@ -47,7 +47,7 @@ mean_val <- ard_data %>%
 A typical demographic ARD will look like this:
 
 ```
- group1   group1_level variable variable_grp variable_grp_level stat_name stat_label stat_value stat_value_fmt
+ group1   group1_level variable variable_grp variable_grp_level stat_name stat_label stat stat_fmt
  TRT01A   Placebo      AGE      <NA>         <NA>               n         n          <list [1]> 86            
  TRT01A   Placebo      AGE      <NA>         <NA>               mean      Mean       <list [1]> 75.2          
  TRT01A   Placebo      AGE      <NA>         <NA>               sd        SD         <list [1]> 8.12          

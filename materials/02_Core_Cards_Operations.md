@@ -89,7 +89,7 @@ To calculate percentages for a table, you need the total denominator (usually th
 # Get the total denominator for each treatment arm
 ard_total_n(adsl, by = TRT01A)
 ```
-This returns an ARD containing a single statistic row per treatment arm: `stat_name = "N"` and `stat_value` containing the total count.
+This returns an ARD containing a single statistic row per treatment arm: `stat_name = "N"` and `stat` containing the total count.
 
 ---
 

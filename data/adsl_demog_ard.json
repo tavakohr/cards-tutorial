@@ -7,8 +7,8 @@
     "variable_grp_level": null,
     "stat_name": "n",
     "stat_label": "n",
-    "stat_value": 86,
-    "stat_value_fmt": "86",
+    "stat": 86,
+    "stat_fmt": "86",
     "context": "ard_continuous"
   },
   {
@@ -19,8 +19,8 @@
     "variable_grp_level": null,
     "stat_name": "mean",
     "stat_label": "Mean",
-    "stat_value": 75.21,
-    "stat_value_fmt": "75.2",
+    "stat": 75.21,
+    "stat_fmt": "75.2",
     "context": "ard_continuous"
   },
   {
@@ -31,8 +31,8 @@
     "variable_grp_level": null,
     "stat_name": "sd",
     "stat_label": "SD",
-    "stat_value": 8.12,
-    "stat_value_fmt": "8.12",
+    "stat": 8.12,
+    "stat_fmt": "8.12",
     "context": "ard_continuous"
   },
   {
@@ -43,8 +43,8 @@
     "variable_grp_level": null,
     "stat_name": "n",
     "stat_label": "n",
-    "stat_value": 84,
-    "stat_value_fmt": "84",
+    "stat": 84,
+    "stat_fmt": "84",
     "context": "ard_continuous"
   },
   {
@@ -55,8 +55,8 @@
     "variable_grp_level": null,
     "stat_name": "mean",
     "stat_label": "Mean",
-    "stat_value": 74.38,
-    "stat_value_fmt": "74.4",
+    "stat": 74.38,
+    "stat_fmt": "74.4",
     "context": "ard_continuous"
   },
   {
@@ -67,8 +67,8 @@
     "variable_grp_level": null,
     "stat_name": "sd",
     "stat_label": "SD",
-    "stat_value": 7.89,
-    "stat_value_fmt": "7.89",
+    "stat": 7.89,
+    "stat_fmt": "7.89",
     "context": "ard_continuous"
   },
   {
@@ -79,8 +79,8 @@
     "variable_grp_level": "F",
     "stat_name": "n",
     "stat_label": "n",
-    "stat_value": 53,
-    "stat_value_fmt": "53",
+    "stat": 53,
+    "stat_fmt": "53",
     "context": "ard_categorical"
   },
   {
@@ -91,8 +91,8 @@
     "variable_grp_level": "F",
     "stat_name": "p",
     "stat_label": "%",
-    "stat_value": 0.616,
-    "stat_value_fmt": "61.6%",
+    "stat": 0.616,
+    "stat_fmt": "61.6%",
     "context": "ard_categorical"
   },
   {
@@ -103,8 +103,8 @@
     "variable_grp_level": "M",
     "stat_name": "n",
     "stat_label": "n",
-    "stat_value": 33,
-    "stat_value_fmt": "33",
+    "stat": 33,
+    "stat_fmt": "33",
     "context": "ard_categorical"
   },
   {
@@ -115,8 +115,8 @@
     "variable_grp_level": "M",
     "stat_name": "p",
     "stat_label": "%",
-    "stat_value": 0.384,
-    "stat_value_fmt": "38.4%",
+    "stat": 0.384,
+    "stat_fmt": "38.4%",
     "context": "ard_categorical"
   },
   {
@@ -127,8 +127,8 @@
     "variable_grp_level": "F",
     "stat_name": "n",
     "stat_label": "n",
-    "stat_value": 40,
-    "stat_value_fmt": "40",
+    "stat": 40,
+    "stat_fmt": "40",
     "context": "ard_categorical"
   },
   {
@@ -139,8 +139,8 @@
     "variable_grp_level": "F",
     "stat_name": "p",
     "stat_label": "%",
-    "stat_value": 0.476,
-    "stat_value_fmt": "47.6%",
+    "stat": 0.476,
+    "stat_fmt": "47.6%",
     "context": "ard_categorical"
   },
   {
@@ -151,8 +151,8 @@
     "variable_grp_level": "M",
     "stat_name": "n",
     "stat_label": "n",
-    "stat_value": 44,
-    "stat_value_fmt": "44",
+    "stat": 44,
+    "stat_fmt": "44",
     "context": "ard_categorical"
   },
   {
@@ -163,8 +163,8 @@
     "variable_grp_level": "M",
     "stat_name": "p",
     "stat_label": "%",
-    "stat_value": 0.524,
-    "stat_value_fmt": "52.4%",
+    "stat": 0.524,
+    "stat_fmt": "52.4%",
     "context": "ard_categorical"
   }
 ]

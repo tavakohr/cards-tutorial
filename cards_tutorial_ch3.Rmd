@@ -52,7 +52,7 @@ Clinical standards dictate the exact number of decimal places for each statistic
 - Means and Medians are formatted to 1 decimal place.
 - Standard deviations (`sd`) are formatted to 2 decimal places.
 
-In `{cards}`, you specify these rules using the `fmt_fn` argument when calculating the ARD. The formatted string is saved in the `stat_value_fmt` column.
+In `{cards}`, you specify these rules using the `fmt_fn` argument when calculating the ARD. The formatted string is generated in the `stat_fmt` column after calling `apply_fmt_fun()`.
 
 ---
 
@@ -60,7 +60,7 @@ In `{cards}`, you specify these rules using the `fmt_fn` argument when calculati
 
 Calculate continuous summaries for `AGE` and categorical summaries for `SEX`, and combine them using `bind_ard()`.
 
-```{r ch3-ex1, exercise=TRUE, exercise.lines=15}
+``` {r ch3-ex1, exercise=TRUE, exercise.lines=15}
 # 1. Generate continuous ARD for AGE
 ard_age <- ard_continuous(adsl, variables = AGE, by = TRT01A)
 
@@ -74,16 +74,16 @@ ard_demog <- ___(ard_age, ard_sex)
 ard_demog
 ```
 
-```{r ch3-ex1-hint-1}
+``` {r ch3-ex1-hint-1}
 # Call bind_ard with your two ARD data frames
 bind_ard(ard_age, ard_sex)
 ```
 
-```{r ch3-ex1-solution}
+``` {r ch3-ex1-solution}
 bind_ard(ard_age, ard_sex)
 ```
 
-```{r ch3-ex1-check}
+``` {r ch3-ex1-check}
 grade_result(
   pass_if(~ is.data.frame(.result) && all(c("AGE", "SEX") %in% .result$variable), "Correct! bind_ard stacked both tables. Downstream tools can now render a unified demographics table from this single ARD object."),
   fail_if(~ TRUE, "Ensure you are calling bind_ard(ard_age, ard_sex).")
@@ -99,7 +99,7 @@ Calculate continuous summaries for `AGE` grouped by `TRT01A`, but apply custom f
 - `mean` = 1 decimal place
 - `sd` = 2 decimal places
 
-```{r ch3-ex2, exercise=TRUE, exercise.lines=15}
+``` {r ch3-ex2, exercise=TRUE, exercise.lines=15}
 # Generate continuous summaries with custom formatting rules
 # Hint: pass a nested list to fmt_fn mapping stat_names to decimal integers
 
@@ -116,16 +116,18 @@ ard_age_fmt <- ard_continuous(
   )
 )
 
-# Preview results
-ard_age_fmt %>% select(variable, stat_name, stat_value_fmt)
+# Apply formatting function to add 'stat_fmt' column and select columns
+ard_age_fmt %>%
+  apply_fmt_fun() %>%
+  select(variable, stat_name, stat_fmt)
 ```
 
-```{r ch3-ex2-hint-1}
+``` {r ch3-ex2-hint-1}
 # Set n = 0, mean = 1, sd = 2
 # fmt_fn = list(AGE = list(n = 0, mean = 1, sd = 2))
 ```
 
-```{r ch3-ex2-solution}
+``` {r ch3-ex2-solution}
 ard_continuous(
   data = adsl,
   variables = AGE,
@@ -137,13 +139,15 @@ ard_continuous(
       sd = 2
     )
   )
-)
+) %>%
+  apply_fmt_fun() %>%
+  select(variable, stat_name, stat_fmt)
 ```
 
-```{r ch3-ex2-check}
+``` {r ch3-ex2-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && .result$stat_value_fmt[.result$stat_name == "mean"][[1]] == sprintf("%.1f", .result$stat_value[.result$stat_name == "mean"][[1]]), "Awesome! You customized the decimals. The stat_value_fmt column now holds the properly rounded display strings."),
-  fail_if(~ TRUE, "Double-check your nested list structure in fmt_fn: list(AGE = list(n = 0, mean = 1, sd = 2)).")
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && .result$stat_fmt[.result$stat_name == "mean"][[1]] == "74.4", "Awesome! You customized the decimals and applied the formatting function to generate the stat_fmt column."),
+  fail_if(~ TRUE, "Double-check your nested list structure in fmt_fn: list(AGE = list(n = 0, mean = 1, sd = 2)) and verify you use apply_fmt_fun() and select(variable, stat_name, stat_fmt).")
 )
 ```
 
@@ -151,7 +155,7 @@ grade_result(
 
 ## Chapter 3 Knowledge Check
 
-```{r ch3-quiz, echo=FALSE}
+``` {r ch3-quiz, echo=FALSE}
 quiz(
   caption = "Chapter 3 — Check Your Understanding",
 
@@ -174,9 +178,9 @@ quiz(
   ),
 
   question(
-    "In which column does `{cards}` store the rounded, formatted display string?",
-    answer("stat_value"),
-    answer("stat_value_fmt", correct = TRUE),
+    "In which column does `{cards}` store the rounded, formatted display string (after calling `apply_fmt_fun()`)?",
+    answer("stat"),
+    answer("stat_fmt", correct = TRUE),
     answer("stat_label"),
     answer("context"),
     allow_retry = TRUE

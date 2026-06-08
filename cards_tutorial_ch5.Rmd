@@ -101,7 +101,9 @@ ard_reg_results <- ard_regression(
 )
 
 # Look at the results
-ard_reg_results %>% select(variable, stat_name, stat_value_fmt)
+ard_reg_results %>%
+  apply_fmt_fun() %>%
+  select(variable, stat_name, stat_fmt)
 ```
 
 ```{r ch5-ex2-hint-1}
@@ -109,17 +111,20 @@ ard_reg_results %>% select(variable, stat_name, stat_value_fmt)
 ```
 
 ```{r ch5-ex2-solution}
-ard_regression(
+ard_reg_results <- ard_regression(
   x = fit_logistic,
   exponentiate = TRUE,
   conf.int = TRUE
 )
+ard_reg_results %>%
+  apply_fmt_fun() %>%
+  select(variable, stat_name, stat_fmt)
 ```
 
 ```{r ch5-ex2-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "estimate" %in% .result$stat_name, "Correct! cardx::ard_regression() created a complete, standard ARD representation of the regression model, incorporating reference rows and formatting variables."),
-  fail_if(~ TRUE, "Check that you specify x = fit_logistic, exponentiate = TRUE, and conf.int = TRUE in ard_regression().")
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "estimate" %in% .result$stat_name, "Correct! cardx::ard_regression() created a complete, standard ARD representation of the regression model, incorporating reference rows and formatting variables."),
+  fail_if(~ TRUE, "Check that you specify x = fit_logistic, exponentiate = TRUE, and conf.int = TRUE in ard_regression() and format the output.")
 )
 ```
 

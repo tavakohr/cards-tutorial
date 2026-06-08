@@ -64,7 +64,7 @@ Because `tbl_ard_summary()` does not run any calculations itself, it executes in
 
 `{rtables}` uses a grid-based layout specification. It has direct integrations to build table cells by reading values from `{cards}` ARD objects:
 - You define the grid layout (columns, rows, nesting).
-- You populate the cells by querying the ARD object (using columns like `group1_level`, `variable`, `stat_name`, and `stat_value`).
+- You populate the cells by querying the ARD object (using columns like `group1_level`, `variable`, `stat_name`, and `stat`).
 - `{rtables}` handles the text wrapping, column widths, page breaks, and rendering to text, RTF, or PDF formats.
 
 This makes ARD the universal exchange format across the entire pharmaverse reporting ecosystem.
@@ -76,4 +76,4 @@ This makes ARD the universal exchange format across the entire pharmaverse repor
 - **Separation of calculation and display** means statistical calculations are executed once, and rendering is performed downstream.
 - **`{gtsummary}`** provides **`tbl_ard_summary()`**, which consumes a pre-computed ARD data frame to render standard clinical tables instantly.
 - **`{rtables}`** uses ARD as an input source to populate complex, multi-level clinical trial tables.
-- Downstream rendering engines query the ARD's `stat_value_fmt` for display text and `stat_value` for raw values, ensuring consistency and auditability.
+- Downstream rendering engines query the ARD's `stat_fmt` for display text and `stat` for raw values, ensuring consistency and auditability.
