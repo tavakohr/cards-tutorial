@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 6: Consuming ARD"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.5
+  version: 1.6
 output:
   learnr::tutorial:
     progressive: true
@@ -222,7 +222,7 @@ grade_result(
 Now let's use the advanced wrapper functions mapping to `modify_table_styling()`. 
 
 - **`modify_abbreviation()`**: A specialized footnote function for defining acronyms in the footer.
-- **`modify_missing_symbol()`**: Replaces `NA` blanks in the table body with a specific character string (`missing_symbol` argument).
+- **`modify_missing_symbol()`**: Replaces `NA` blanks in the table body with a specific character string (`symbol` argument).
 - **`modify_fmt_fun()`**: Updates the formatting function for specific statistics *after* the table is generated.
 - **`text_interpret` parameter**: Instructs `{gtsummary}` to interpret strings as `"md"` (markdown) or `"html"`. Available in all `modify_*` wrappers!
 
@@ -244,7 +244,7 @@ tbl_ard_summary(
   # Hint: modify_abbreviation(all_stat_cols() ~ "TRT = Treatment")
   ___ %>%
   # 3. Replace the NA missing count blanks with the text "Not Assessed"
-  # Hint: modify_missing_symbol(missing_symbol = "Not Assessed")
+  # Hint: modify_missing_symbol(symbol = "Not Assessed")
   ___ %>%
   # 4. Change the formatting of the continuous statistic to 2 decimal places
   # Hint: modify_fmt_fun(update = all_continuous() ~ style_number)
@@ -254,7 +254,7 @@ tbl_ard_summary(
 ```{r ch6-ex4-hint-1}
 # Chain:
 # modify_abbreviation(all_stat_cols() ~ "TRT = Treatment") %>%
-# modify_missing_symbol(missing_symbol = "Not Assessed") %>%
+# modify_missing_symbol(symbol = "Not Assessed") %>%
 # modify_fmt_fun(update = all_continuous() ~ style_number)
 ```
 
@@ -270,7 +270,7 @@ tbl_ard_summary(
     text_interpret = "md"
   ) %>%
   modify_abbreviation(all_stat_cols() ~ "TRT = Treatment") %>%
-  modify_missing_symbol(missing_symbol = "Not Assessed") %>%
+  modify_missing_symbol(symbol = "Not Assessed") %>%
   modify_fmt_fun(update = all_continuous() ~ style_number)
 ```
 

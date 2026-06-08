@@ -107,7 +107,7 @@ styled_table <- base_table %>%
   modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**") %>%
   # Missing Values
   modify_missing_symbol(
-    missing_symbol = "Not Assessed"
+    symbol = "Not Assessed"
   ) %>%
   # Abbreviations
   modify_abbreviation(
