@@ -47,7 +47,7 @@ ard_data <- ard_stack(
 table_demog <- tbl_ard_summary(
   cards = ard_data,
   .by = TRT01A,
-  variables = c(AGE, SEX, RACE)
+  include = c(AGE, SEX, RACE)
 ) %>%
   add_overall() %>%
   modify_header(label = "**Demographic Characteristic**") %>%

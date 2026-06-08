@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 6: Consuming ARD"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.1
+  version: 1.2
 output:
   learnr::tutorial:
     progressive: true
@@ -62,11 +62,11 @@ ard_demog <- ard_stack(
 )
 
 # 2. Render the table using the pre-computed ARD
-# Hint: call tbl_ard_summary() passing card = ard_demog, variables = c(AGE, SEX), and by = TRT01A
+# Hint: call tbl_ard_summary() passing card = ard_demog, include = c(AGE, SEX), and by = TRT01A
 
 demog_table <- ___(
   cards = ard_demog,
-  variables = c(AGE, SEX),
+  include = c(AGE, SEX),
   by = TRT01A
 )
 
@@ -75,13 +75,13 @@ demog_table
 ```
 
 ```{r ch6-ex1-hint-1}
-# Call tbl_ard_summary(cards = ard_demog, variables = c(AGE, SEX), by = TRT01A)
+# Call tbl_ard_summary(cards = ard_demog, include = c(AGE, SEX), by = TRT01A)
 ```
 
 ```{r ch6-ex1-solution}
 tbl_ard_summary(
   cards = ard_demog,
-  variables = c(AGE, SEX),
+  include = c(AGE, SEX),
   by = TRT01A
 )
 ```
@@ -89,7 +89,7 @@ tbl_ard_summary(
 ```{r ch6-ex1-check}
 grade_result(
   pass_if(~ inherits(.result, "gtsummary"), "Fantastic! `{gtsummary}` read the ARD and formatted the table. If you want to change titles or footnotes, you can do so in seconds without recalculating any statistics."),
-  fail_if(~ TRUE, "Check that you are calling tbl_ard_summary() with cards = ard_demog, variables = c(AGE, SEX), and by = TRT01A.")
+  fail_if(~ TRUE, "Check that you are calling tbl_ard_summary() with cards = ard_demog, include = c(AGE, SEX), and by = TRT01A.")
 )
 ```
 
