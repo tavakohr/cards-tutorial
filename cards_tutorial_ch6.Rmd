@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 6: Consuming ARD"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.4
+  version: 1.5
 output:
   learnr::tutorial:
     progressive: true
@@ -171,10 +171,10 @@ The core engine behind all styling in `{gtsummary}` is **`modify_table_styling()
 
 However, `{gtsummary}` provides convenient wrappers for standard typography and headers. Let's practice them:
 - **`modify_header()`**: Modifies column headers.
-- **`modify_spanning_header()`**: Adds headers that group multiple columns together.
+- **`modify_spanning_header()`**: Adds headers that group multiple columns together. You can target all statistics using `all_stat_cols()`, or target specific columns using their internal names (e.g. `c(stat_3, stat_4)`).
 - **`bold_labels()`** and **`italicize_levels()`**: Require no arguments, applying globally to row headers.
 
-```{r ch6-ex3, exercise=TRUE, exercise.lines=15}
+```{r ch6-ex3, exercise=TRUE, exercise.lines=18}
 tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
@@ -182,13 +182,19 @@ tbl_ard_summary(
 ) %>%
   # Bold the row labels (AGE, SEX)
   ___() %>%
-  # Add a spanning header over the columns using modify_spanning_header
-  # Hint: use all_stat_cols() ~ "**Treatment Group**"
+  # 1. Add a spanning header over ALL statistic columns
+  # Hint: modify_spanning_header(all_stat_cols() ~ "**All Treatments**")
+  ___ %>%
+  # 2. Add a spanning header over ONLY the Xanomeline Active columns (stat_3 and stat_4)
+  # Hint: modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**")
   ___
 ```
 
 ```{r ch6-ex3-hint-1}
-# Call bold_labels() %>% modify_spanning_header(all_stat_cols() ~ "**Treatment Group**")
+# Chain the following functions:
+# bold_labels() %>%
+# modify_spanning_header(all_stat_cols() ~ "**All Treatments**") %>%
+# modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**")
 ```
 
 ```{r ch6-ex3-solution}
@@ -198,7 +204,8 @@ tbl_ard_summary(
   by = TRT01A
 ) %>%
   bold_labels() %>%
-  modify_spanning_header(all_stat_cols() ~ "**Treatment Group**")
+  modify_spanning_header(all_stat_cols() ~ "**All Treatments**") %>%
+  modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**")
 ```
 
 ```{r ch6-ex3-check}

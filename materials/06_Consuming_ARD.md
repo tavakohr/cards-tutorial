@@ -88,7 +88,7 @@ Instead of writing massive `modify_table_styling()` calls, `{gtsummary}` exports
 - **`modify_header()`**: Modifies column headers.
   - `stat_by`: Formula targeting stratified columns (e.g., `all_stat_cols() ~ "**{level}**"`).
   - `text_interpret`: Set to `"md"` to parse asterisks as bold text.
-- **`modify_spanning_header()`**: Adds headers that group multiple columns together.
+- **`modify_spanning_header()`**: Adds headers that group multiple columns together. Use `all_stat_cols()` to span over everything, or use internal column names like `c(stat_3, stat_4)` to span over specific groups.
 - **`modify_footnote()`**: Attaches a footnote symbol to specific columns or rows.
 - **`modify_abbreviation()`**: A specialized footnote function for defining acronyms in the footer.
 - **`modify_missing_symbol()`**: Replaces `NA` blanks in the table body with a specific character string (like `"ND"` or `"-"`).
@@ -102,6 +102,9 @@ styled_table <- base_table %>%
     label = "**Demographic**",
     text_interpret = "md"
   ) %>%
+  # Spanning Headers (All and Specific)
+  modify_spanning_header(all_stat_cols() ~ "**All Treatments**") %>%
+  modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**") %>%
   # Missing Values
   modify_missing_symbol(
     missing_symbol = "Not Assessed"
