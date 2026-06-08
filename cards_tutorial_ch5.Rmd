@@ -103,6 +103,7 @@ ard_reg_results <- ard_regression(
 # Look at the results
 ard_reg_results %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(variable, stat_name, stat_fmt)
 ```
 
@@ -118,6 +119,7 @@ ard_reg_results <- ard_regression(
 )
 ard_reg_results %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(variable, stat_name, stat_fmt)
 ```
 

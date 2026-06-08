@@ -77,6 +77,7 @@ ard_custom <- ard_continuous(
 # Look at the results
 ard_custom %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(group1_level, variable, stat_name, stat_fmt)
 ```
 
@@ -106,6 +107,7 @@ ard_custom <- ard_continuous(
 )
 ard_custom %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(group1_level, variable, stat_name, stat_fmt)
 ```
 

@@ -121,6 +121,7 @@ ard_age_fmt <- ard_continuous(
 # Apply formatting function to add 'stat_fmt' column and select columns
 ard_age_fmt %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(variable, stat_name, stat_fmt)
 ```
 
@@ -143,6 +144,7 @@ ard_continuous(
   )
 ) %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(variable, stat_name, stat_fmt)
 ```
 

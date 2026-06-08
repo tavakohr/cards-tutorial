@@ -104,6 +104,7 @@ ard_ttest <- ___(
 # Look at the statistical results
 ard_ttest %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(stat_name, stat_label, stat_fmt)
 ```
 
@@ -120,6 +121,7 @@ ard_ttest <- ard_stats_t_test(
 )
 ard_ttest %>%
   apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
   select(stat_name, stat_label, stat_fmt)
 ```
 
@@ -159,7 +161,8 @@ ard_km_rates <- ard_survival_survfit(
 # View results
 ard_km_rates %>%
   apply_fmt_fun() %>%
-  select(group1_level, variable_grp_level, stat_name, stat_fmt)
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(group1_level, variable_level, stat_name, stat_fmt)
 ```
 
 ```{r ch4-ex2-hint-1}
@@ -175,12 +178,13 @@ ard_km_rates <- ard_survival_survfit(
 )
 ard_km_rates %>%
   apply_fmt_fun() %>%
-  select(group1_level, variable_grp_level, stat_name, stat_fmt)
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(group1_level, variable_level, stat_name, stat_fmt)
 ```
 
 ```{r ch4-ex2-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result), "Incredible! You generated Kaplan-Meier survival statistics at specified time intervals. These are mapped to rows where variable_grp_level denotes the timepoint (e.g. 6 or 12)."),
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result), "Incredible! You generated Kaplan-Meier survival statistics at specified time intervals. These are mapped to rows where variable_level denotes the timepoint (e.g. 6 or 12)."),
   fail_if(~ TRUE, "Check that you specify times = c(6, 12) in your ard_survival_survfit call and format the output.")
 )
 ```
@@ -205,7 +209,7 @@ quiz(
   question(
     "How does `ard_survival_survfit()` represent different time points in the ARD structure?",
     answer("In separate columns (time_6, time_12)"),
-    answer("In the `variable_grp_level` column as separate row records", correct = TRUE),
+    answer("In the `variable_level` column as separate row records", correct = TRUE),
     answer("In the `group1_level` column"),
     answer("As list elements within a single row"),
     allow_retry = TRUE
