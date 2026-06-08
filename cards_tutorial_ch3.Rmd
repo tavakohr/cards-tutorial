@@ -1,0 +1,196 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 3: Stacking and Formatting"
+author: "Hamid Tavakoli, MD, MSc"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  Master combining multiple ARD objects using bind_ard and customizing decimal formats with fmt_fn in cards.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(pharmaversesdtm)
+library(dplyr)
+library(cards)
+library(cardx)
+library(jsonlite)
+library(glue)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+```
+
+---
+
+## Chapter 3: Stacking and Formatting
+
+### 3.1 Combining ARD Data Frames
+
+Most clinical trial tables present more than one variable. In `{cards}`, you generate individual ARD data frames for each variable (or set of variables of the same type) and then bind them vertically to create a single, unified dataset.
+
+- **`bind_ard()`**: Combines multiple ARD datasets. It validates the ARD structure and checks for duplicate rows (e.g., repeating the same analysis statistic for the same group and variable).
+- **`ard_stack()`**: A wrapper that lets you perform continuous and categorical calculations in a single function call.
+
+---
+
+### 3.2 Formatting Clinical Statistics
+
+Clinical standards dictate the exact number of decimal places for each statistic:
+- Sample sizes (`n`) are typically formatted as integers (0 decimal places).
+- Means and Medians are formatted to 1 decimal place.
+- Standard deviations (`sd`) are formatted to 2 decimal places.
+
+In `{cards}`, you specify these rules using the `fmt_fn` argument when calculating the ARD. The formatted string is saved in the `stat_value_fmt` column.
+
+---
+
+## Exercise 3.1 — Combine Multiple ARD Outputs
+
+Calculate continuous summaries for `AGE` and categorical summaries for `SEX`, and combine them using `bind_ard()`.
+
+```{r ch3-ex1, exercise=TRUE, exercise.lines=15}
+# 1. Generate continuous ARD for AGE
+ard_age <- ard_continuous(adsl, variables = AGE, by = TRT01A)
+
+# 2. Generate categorical ARD for SEX
+ard_sex <- ard_categorical(adsl, variables = SEX, by = TRT01A)
+
+# 3. Bind them together into one demographic ARD
+# Hint: use bind_ard()
+
+ard_demog <- ___(ard_age, ard_sex)
+ard_demog
+```
+
+```{r ch3-ex1-hint-1}
+# Call bind_ard with your two ARD data frames
+bind_ard(ard_age, ard_sex)
+```
+
+```{r ch3-ex1-solution}
+bind_ard(ard_age, ard_sex)
+```
+
+```{r ch3-ex1-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && all(c("AGE", "SEX") %in% .result$variable), "Correct! bind_ard stacked both tables. Downstream tools can now render a unified demographics table from this single ARD object."),
+  fail_if(~ TRUE, "Ensure you are calling bind_ard(ard_age, ard_sex).")
+)
+```
+
+---
+
+## Exercise 3.2 — Apply Custom Formatting Rules
+
+Calculate continuous summaries for `AGE` grouped by `TRT01A`, but apply custom formatting:
+- `n` = 0 decimal places
+- `mean` = 1 decimal place
+- `sd` = 2 decimal places
+
+```{r ch3-ex2, exercise=TRUE, exercise.lines=15}
+# Generate continuous summaries with custom formatting rules
+# Hint: pass a nested list to fmt_fn mapping stat_names to decimal integers
+
+ard_age_fmt <- ard_continuous(
+  data = adsl,
+  variables = AGE,
+  by = TRT01A,
+  fmt_fn = list(
+    AGE = list(
+      n = ___,
+      mean = ___,
+      sd = ___
+    )
+  )
+)
+
+# Preview results
+ard_age_fmt %>% select(variable, stat_name, stat_value_fmt)
+```
+
+```{r ch3-ex2-hint-1}
+# Set n = 0, mean = 1, sd = 2
+# fmt_fn = list(AGE = list(n = 0, mean = 1, sd = 2))
+```
+
+```{r ch3-ex2-solution}
+ard_continuous(
+  data = adsl,
+  variables = AGE,
+  by = TRT01A,
+  fmt_fn = list(
+    AGE = list(
+      n = 0,
+      mean = 1,
+      sd = 2
+    )
+  )
+)
+```
+
+```{r ch3-ex2-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && .result$stat_value_fmt[.result$stat_name == "mean"][[1]] == sprintf("%.1f", .result$stat_value[.result$stat_name == "mean"][[1]]), "Awesome! You customized the decimals. The stat_value_fmt column now holds the properly rounded display strings."),
+  fail_if(~ TRUE, "Double-check your nested list structure in fmt_fn: list(AGE = list(n = 0, mean = 1, sd = 2)).")
+)
+```
+
+---
+
+## Chapter 3 Knowledge Check
+
+```{r ch3-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 3 — Check Your Understanding",
+
+  question(
+    "Which function in `{cards}` is used to combine multiple ARD data frames vertically?",
+    answer("dplyr::bind_rows()"),
+    answer("bind_ard()", correct = TRUE),
+    answer("stack_ard()"),
+    answer("ard_merge()"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What happens by default if `bind_ard()` detects duplicate statistic rows across inputs?",
+    answer("It silently ignores the duplicates"),
+    answer("It throws an error/warning to prevent inconsistent results", correct = TRUE),
+    answer("It merges them by calculating the average"),
+    answer("It deletes the entire dataset"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "In which column does `{cards}` store the rounded, formatted display string?",
+    answer("stat_value"),
+    answer("stat_value_fmt", correct = TRUE),
+    answer("stat_label"),
+    answer("context"),
+    allow_retry = TRUE
+  )
+)
+```
+
+---
+
+## Chapter 3 Summary {.congratulations}
+
+You now know:
+- How to stack multiple ARD data frames using **`bind_ard()`**.
+- How `bind_ard()` protects against data duplication.
+- How to configure decimal places and formatting rules using the **`fmt_fn`** list inside calculation functions.
+
+**Next:** Chapter 4 — Extended Stats with `{cardx}` (Hypothesis tests and Kaplan-Meier curves)

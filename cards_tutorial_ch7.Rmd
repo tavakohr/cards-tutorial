@@ -1,0 +1,222 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 7: Advanced Workflows"
+author: "Hamid Tavakoli, MD, MSc"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  Write custom statistical functions and explore the field-by-field mapping between cards ARDs and CDISC ARS structures.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(pharmaversesdtm)
+library(dplyr)
+library(cards)
+library(cardx)
+library(jsonlite)
+library(glue)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+```
+
+---
+
+## Chapter 7: Advanced Workflows
+
+### 7.1 Custom Statistics & Standards Alignment
+
+In clinical programming, we often need to calculate non-standard statistics (like geometric means in PK/PD studies) or audit calculations for regulatory compliance. 
+
+- **Custom Statistics**: You can pass a named list of custom functions to `ard_continuous(statistics = ...)` to calculate anything.
+- **CDISC ARS Alignment**: Because `{cards}` ARD is structured, it maps directly, row-by-row, to the CDISC Analysis Results Standard (ARS) JSON schema's **`OperationResult`** objects, enabling automated regulatory validation and traceability.
+
+---
+
+## Exercise 7.1 — Run a Custom Geometric Mean Statistic
+
+Let's write a simple geometric mean function: `geom_mean = function(x) exp(mean(log(x[x > 0]), na.rm = TRUE))`. We will pass it to `ard_continuous()` to summarize `AGE` grouped by `TRT01A`.
+
+```{r ch7-ex1, exercise=TRUE, exercise.lines=20}
+# 1. Define the geometric mean function
+geom_mean <- function(x) {
+  exp(mean(log(x[x > 0]), na.rm = TRUE))
+}
+
+# 2. Run ard_continuous using the custom function
+# Hint: Pass your function as a named item inside statistics = list(AGE = list(gmean = ...))
+
+ard_custom <- ard_continuous(
+  data = adsl,
+  variables = AGE,
+  by = TRT01A,
+  statistics = list(
+    AGE = list(
+      gmean = ___
+    )
+  ),
+  fmt_fn = list(
+    AGE = list(
+      gmean = 1
+    )
+  )
+)
+
+# Look at the results
+ard_custom %>% select(group1_level, variable, stat_name, stat_value_fmt)
+```
+
+```{r ch7-ex1-hint-1}
+# Set gmean = geom_mean inside statistics
+```
+
+```{r ch7-ex1-solution}
+geom_mean <- function(x) {
+  exp(mean(log(x[x > 0]), na.rm = TRUE))
+}
+
+ard_continuous(
+  data = adsl,
+  variables = AGE,
+  by = TRT01A,
+  statistics = list(
+    AGE = list(
+      gmean = geom_mean
+    )
+  ),
+  fmt_fn = list(
+    AGE = list(
+      gmean = 1
+    )
+  )
+)
+```
+
+```{r ch7-ex1-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "gmean" %in% .result$stat_name, "Correct! You successfully calculated and formatted a custom statistic. This demonstrates how extensible the `{cards}` package is for non-standard clinical summaries."),
+  fail_if(~ TRUE, "Check that you map gmean = geom_mean inside the nested statistics list.")
+)
+```
+
+---
+
+## Exercise 7.2 — Map a Flat ARD Row to CDISC ARS JSON
+
+Each row in a `{cards}` ARD corresponds to a CDISC ARS `OperationResult` object inside `Analysis.results`. 
+
+Write a simple mapper function that takes a single-row ARD dataframe (or list) and maps its elements to the CDISC ARS JSON list structure:
+- `stat_name` -> `operationId`
+- `group1` -> `groupingId`
+- `group1_level` -> `groupId`
+- `stat_value` -> `rawValue`
+- `stat_value_fmt` -> `formattedValue`
+
+```{r ch7-ex2, exercise=TRUE, exercise.lines=20}
+# A single-row ARD dataframe
+ard_row <- tibble(
+  group1 = "TRT01A",
+  group1_level = "Placebo",
+  variable = "AGE",
+  stat_name = "mean",
+  stat_value = list(75.21),
+  stat_value_fmt = "75.2"
+)
+
+# Complete the mapper function
+map_row_to_ars <- function(row) {
+  list(
+    operationId = row$stat_name,
+    resultGroups = list(
+      list(
+        groupingId = row$___,      # group1
+        groupId = row$___          # group1_level
+      )
+    ),
+    rawValue = row$stat_value[[1]],
+    formattedValue = row$___       # stat_value_fmt
+  )
+}
+
+# Run mapper
+map_row_to_ars(ard_row)
+```
+
+```{r ch7-ex2-hint-1}
+# Map group1 to groupingId, group1_level to groupId, and stat_value_fmt to formattedValue
+```
+
+```{r ch7-ex2-solution}
+map_row_to_ars <- function(row) {
+  list(
+    operationId = row$stat_name,
+    resultGroups = list(
+      list(
+        groupingId = row$group1,
+        groupId = row$group1_level
+      )
+    ),
+    rawValue = row$stat_value[[1]],
+    formattedValue = row$stat_value_fmt
+  )
+}
+map_row_to_ars(ard_row)
+```
+
+```{r ch7-ex2-check}
+grade_result(
+  pass_if(~ .result$operationId == "mean" && .result$resultGroups[[1]]$groupId == "Placebo", "Superb! You mapped the flat ARD row to the CDISC ARS logical schema. This row can now be serialized directly as compliance-conformant JSON for submission!"),
+  fail_if(~ TRUE, "Ensure you are pulling row$group1, row$group1_level, and row$stat_value_fmt inside the function.")
+)
+```
+
+---
+
+## Chapter 7 Knowledge Check
+
+```{r ch7-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 7 — Check Your Understanding",
+
+  question(
+    "How do you pass a custom statistic function to `ard_continuous()`?",
+    answer("Write a new R package"),
+    answer("Pass a named list of functions to the `statistics` argument", correct = TRUE),
+    answer("Pass it to the `fmt_fn` argument"),
+    answer("You cannot calculate custom statistics in `{cards}`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which CDISC ARS object directly corresponds to a row of flat `{cards}` ARD containing a calculated value?",
+    answer("AnalysisSet"),
+    answer("OperationResult", correct = TRUE),
+    answer("OutputDisplay"),
+    answer("WhereClause"),
+    allow_retry = TRUE
+  )
+)
+```
+
+---
+
+## Chapter 7 Summary {.congratulations}
+
+You now know how to:
+- Write and integrate **custom continuous statistics** functions in `{cards}`.
+- Map flat ARD columns directly to CDISC ARS **`OperationResult`** JSON specifications.
+- Understand the automated quality control benefits of standardized results metadata.
+
+**Congratulations!** You have completed the `{cards}` & `{cardx}` interactive training curriculum!

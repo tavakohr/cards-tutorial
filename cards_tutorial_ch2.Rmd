@@ -1,0 +1,198 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 2: Core cards Operations"
+author: "Hamid Tavakoli, MD, MSc"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  Learn to generate continuous, categorical, dichotomous, and missingness summaries using the core functions of the cards R package.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(pharmaversesdtm)
+library(dplyr)
+library(cards)
+library(cardx)
+library(jsonlite)
+library(glue)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+```
+
+---
+
+## Chapter 2: Core cards Operations
+
+### 2.1 Continuous, Categorical, and Dichotomous Functions
+
+The `{cards}` package provides a set of specialized functions to calculate statistics based on the data type:
+
+- **`ard_continuous()`**: Calculates continuous summaries (such as `mean`, `sd`, `median`, `min`, `max`, and quantiles).
+- **`ard_categorical()`**: Computes frequency tables, outputting counts (`n`), denominators (`N`), and percentages (`p`) for every level of a categorical factor.
+- **`ard_dichotomous()`**: Extracts categorical summaries but retains only a single positive outcome level (e.g. keeping only response `"Y"`).
+- **`ard_missing()`**: Summarizes counts and percentages of missing (`NA`) vs non-missing values.
+- **`ard_total_n()`**: Calculates the total subject count (denominator) per grouping.
+
+All of these functions share the `by` argument to group calculations by variables such as `TRT01A`.
+
+---
+
+## Exercise 2.1 — Summarize Continuous Data
+
+Summarize the continuous variable `AGE` in the `adsl` dataset, grouped by treatment arm (`TRT01A`).
+
+```{r ch2-ex1, exercise=TRUE, exercise.lines=10}
+# Generate the continuous ARD for AGE grouped by TRT01A
+# Hint: use ard_continuous() with variables = AGE and by = TRT01A
+
+ard_continuous(
+  data = adsl,
+  variables = ___,
+  by = ___
+)
+```
+
+```{r ch2-ex1-hint-1}
+# Pass AGE to variables and TRT01A to by
+ard_continuous(adsl, variables = AGE, by = TRT01A)
+```
+
+```{r ch2-ex1-solution}
+ard_continuous(adsl, variables = AGE, by = TRT01A)
+```
+
+```{r ch2-ex1-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "mean" %in% .result$stat_name, "Correct! ard_continuous successfully generated the continuous statistics (mean, sd, etc.) for AGE by TRT01A."),
+  fail_if(~ TRUE, "Ensure you are using ard_continuous with variables = AGE and by = TRT01A.")
+)
+```
+
+---
+
+## Exercise 2.2 — Summarize Categorical Data
+
+Summarize the categorical variable `SEX` in `adsl`, grouped by treatment arm (`TRT01A`).
+
+```{r ch2-ex2, exercise=TRUE, exercise.lines=10}
+# Calculate categorical counts and percentages for SEX by TRT01A
+# Hint: use ard_categorical()
+
+ard_categorical(
+  data = adsl,
+  variables = ___,
+  by = ___
+)
+```
+
+```{r ch2-ex2-hint-1}
+# Pass SEX to variables and TRT01A to by
+ard_categorical(adsl, variables = SEX, by = TRT01A)
+```
+
+```{r ch2-ex2-solution}
+ard_categorical(adsl, variables = SEX, by = TRT01A)
+```
+
+```{r ch2-ex2-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && all(c("F", "M") %in% .result$variable_grp_level), "Excellent! You generated categorical summaries. Notice that there are rows for both 'F' and 'M' levels."),
+  fail_if(~ TRUE, "Verify that you are using ard_categorical() with variables = SEX and by = TRT01A.")
+)
+```
+
+---
+
+## Exercise 2.3 — Summarize Dichotomous Flag Variables
+
+Clinical data contains many flag variables (like `SAFFL = "Y"` or `COMPLFL = "Y"`). We often only want to show the positive indicator in our table. Use `ard_dichotomous()` to summarize the `COMPLFL` (Completed Study Flag) variable for the `"Y"` level, grouped by `TRT01A`.
+
+```{r ch2-ex3, exercise=TRUE, exercise.lines=10}
+# Summarize COMPLFL where value is "Y"
+# Hint: use ard_dichotomous() and specify value = list(COMPLFL = "Y")
+
+ard_dichotomous(
+  data = adsl,
+  variables = COMPLFL,
+  value = list(COMPLFL = ___),
+  by = TRT01A
+)
+```
+
+```{r ch2-ex3-hint-1}
+# Supply "Y" to the COMPLFL item in the value list
+ard_dichotomous(adsl, variables = COMPLFL, value = list(COMPLFL = "Y"), by = TRT01A)
+```
+
+```{r ch2-ex3-solution}
+ard_dichotomous(adsl, variables = COMPLFL, value = list(COMPLFL = "Y"), by = TRT01A)
+```
+
+```{r ch2-ex3-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && !("N" %in% .result$variable_grp_level), "Superb! ard_dichotomous kept only the rows for the 'Y' level, saving space and simplifying downstream table generation."),
+  fail_if(~ TRUE, "Make sure you set value = list(COMPLFL = 'Y') inside ard_dichotomous.")
+)
+```
+
+---
+
+## Chapter 2 Knowledge Check
+
+```{r ch2-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 2 — Check Your Understanding",
+
+  question(
+    "Which function should you use to summarize continuous variables like weight or age?",
+    answer("ard_categorical()"),
+    answer("ard_continuous()", correct = TRUE),
+    answer("ard_total_n()"),
+    answer("ard_missing()"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "How does `ard_dichotomous()` differ from `ard_categorical()`?",
+    answer("It operates on continuous data"),
+    answer("It keeps only the statistic rows corresponding to the specified level (e.g. 'Y')", correct = TRUE),
+    answer("It does not calculate percentages"),
+    answer("It runs twice as fast"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What argument do you use to group calculations by treatment arm in `{cards}` functions?",
+    answer("group"),
+    answer("split"),
+    answer("by", correct = TRUE),
+    answer("strata"),
+    allow_retry = TRUE
+  )
+)
+```
+
+---
+
+## Chapter 2 Summary {.congratulations}
+
+You now know how to:
+- Generate summaries for continuous variables using **`ard_continuous()`**.
+- Compute categorical frequency tables using **`ard_categorical()`**.
+- Extract positive response flags using **`ard_dichotomous()`**.
+- Perform grouped analysis across all functions via the uniform **`by`** argument.
+
+**Next:** Chapter 3 — Stacking and Formatting (`bind_ard`, `ard_fmt_args`, etc.)

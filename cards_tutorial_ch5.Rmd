@@ -1,0 +1,173 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 5: Models, broom, and parameters"
+author: "Hamid Tavakoli, MD, MSc"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  Deep dive into statistical model tidying. Understand the roles of broom, parameters, and cardx::ard_regression.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(pharmaversesdtm)
+library(dplyr)
+library(cards)
+library(cardx)
+library(broom)
+library(parameters)
+library(jsonlite)
+library(glue)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+
+# Pre-fit model for use in exercises
+fit_logistic <- glm(
+  COMPLFL ~ TRT01A + AGE, 
+  data = adsl %>% mutate(COMPLFL = ifelse(COMPLFL == "Y", 1, 0)), 
+  family = binomial()
+)
+```
+
+---
+
+## Chapter 5: Models, broom, and parameters
+
+### 5.1 R Model Extraction and the Tidier Ecosystem
+
+Statistical models in R are complex, deeply nested lists containing information about coefficients, residuals, convergence, and family. Slicing these lists manually is tedious. 
+
+The R community developed the **Tidier Ecosystem** to solve this:
+- **`{broom}`**: Provides `tidy()`, which converts a model's coefficients into a standard tibble with columns like `term`, `estimate`, and `p.value`.
+- **`{parameters}`**: A robust alternative from the `{easystats}` suite that extracts detailed parameter tables (via `model_parameters()`) for an even wider range of models.
+- **`{broom.helpers}`**: Acts as an abstraction layer to standardize column headers and add reference levels for clinical reporting.
+- **`{cardx}`**: Leverages these packages to generate regression ARDs using `ard_regression()`.
+
+---
+
+## Exercise 5.1 — Tidy a Logistic Regression Model manually
+
+The model `fit_logistic` (Response flag `COMPLFL` vs. Treatment and Age) is already fitted in your environment. Let's use `broom::tidy()` to flatten its outputs into a clean data frame with exponentiated coefficients (to get Odds Ratios) and confidence intervals.
+
+```{r ch5-ex1, exercise=TRUE, exercise.lines=10}
+# Tidy the pre-loaded fit_logistic model
+# Hint: call tidy() with conf.int = TRUE and exponentiate = TRUE
+
+fit_logistic %>%
+  ___(conf.int = ___, exponentiate = ___)
+```
+
+```{r ch5-ex1-hint-1}
+# Call tidy(fit_logistic, conf.int = TRUE, exponentiate = TRUE)
+```
+
+```{r ch5-ex1-solution}
+tidy(fit_logistic, conf.int = TRUE, exponentiate = TRUE)
+```
+
+```{r ch5-ex1-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "conf.low" %in% names(.result), "Excellent! broom::tidy() converted the model to a flat tibble, providing Odds Ratios and Confidence Intervals in standard columns."),
+  fail_if(~ TRUE, "Try calling tidy(fit_logistic, conf.int = TRUE, exponentiate = TRUE).")
+)
+```
+
+---
+
+## Exercise 5.2 — Generate a Regression ARD using `ard_regression`
+
+Instead of tidying manually and mapping results to an ARD schema, we can pass our model directly to `cardx::ard_regression()`. This will run the tidier, add categorical reference rows, and structure everything as a standard ARD data frame.
+
+```{r ch5-ex2, exercise=TRUE, exercise.lines=12}
+# Convert fit_logistic results to an ARD using ard_regression()
+# Hint: Pass fit_logistic, set exponentiate = TRUE and conf.int = TRUE
+
+ard_reg_results <- ard_regression(
+  x = ___,
+  exponentiate = ___,
+  conf.int = ___
+)
+
+# Look at the results
+ard_reg_results %>% select(variable, stat_name, stat_value_fmt)
+```
+
+```{r ch5-ex2-hint-1}
+# Set x = fit_logistic, exponentiate = TRUE, conf.int = TRUE
+```
+
+```{r ch5-ex2-solution}
+ard_regression(
+  x = fit_logistic,
+  exponentiate = TRUE,
+  conf.int = TRUE
+)
+```
+
+```{r ch5-ex2-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "estimate" %in% .result$stat_name, "Correct! cardx::ard_regression() created a complete, standard ARD representation of the regression model, incorporating reference rows and formatting variables."),
+  fail_if(~ TRUE, "Check that you specify x = fit_logistic, exponentiate = TRUE, and conf.int = TRUE in ard_regression().")
+)
+```
+
+---
+
+## Chapter 5 Knowledge Check
+
+```{r ch5-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 5 — Check Your Understanding",
+
+  question(
+    "What does `broom::tidy()` do?",
+    answer("Plots regression diagnostics"),
+    answer("Converts complex statistical model coefficient outputs into flat, tidy data frames", correct = TRUE),
+    answer("Cleans missing values from datasets"),
+    answer("Formats R code syntax"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which package does `{cardx}` use under the hood to standardize outputs from both `{broom}` and `{parameters}`?",
+    answer("ggplot2"),
+    answer("broom.helpers", correct = TRUE),
+    answer("dplyr"),
+    answer("tidyr"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "How do you get Odds Ratios (exponentiated coefficients) from a logistic model in `ard_regression()`?",
+    answer("Set odds_ratio = TRUE"),
+    answer("Set exponentiate = TRUE", correct = TRUE),
+    answer("Pass exp = TRUE"),
+    answer("Perform the exponentiation manually after generating the ARD"),
+    allow_retry = TRUE
+  )
+)
+```
+
+---
+
+## Chapter 5 Summary {.congratulations}
+
+You now understand:
+- The role of **model tidying** in flattening nested statistical objects.
+- How **`{broom}`** (`tidy()`) and **`{parameters}`** (`model_parameters()`) extract model estimates.
+- How **`{broom.helpers}`** standardizes coefficient columns and adds categorical reference rows.
+- How to generate regression ARDs using **`cardx::ard_regression()`**.
+
+**Next:** Chapter 6 — Consuming ARD (Rendering tables with `{gtsummary}`)

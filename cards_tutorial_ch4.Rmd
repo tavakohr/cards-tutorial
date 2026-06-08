@@ -1,0 +1,181 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 4: Extended Stats with cardx"
+author: "Hamid Tavakoli, MD, MSc"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  Explore how cardx extends the ARD framework with functions for t-tests, Fisher's exact tests, and Kaplan-Meier survival models.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(pharmaversesdtm)
+library(dplyr)
+library(cards)
+library(cardx)
+library(survival)
+library(jsonlite)
+library(glue)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+data("adtte_onco", package = "pharmaverseadam")
+adtte <- adtte_onco %>%
+  left_join(
+    adsl %>%
+      mutate(ITTFL = ifelse(!is.na(ARM) & ARM != "", "Y", "N")) %>%
+      select(USUBJID, TRT01A, ITTFL),
+    by = "USUBJID"
+  )
+```
+
+---
+
+## Chapter 4: Extended Stats with cardx
+
+### 4.1 Statistical Testing & Survival Wrap-ups
+
+`{cardx}` extends the `{cards}` ecosystem by wrapping standard R statistical analysis packages (like `{stats}` and `{survival}`). Rather than returning raw model outputs or complex vectors, `{cardx}` functions process the math and return a standardized ARD dataset.
+
+Key statistical test functions include:
+- `ard_stats_t_test()`: Run a t-test to compare means.
+- `ard_stats_fisher_test()`: Run a Fisher's exact test for categorical variables.
+- `ard_cmh_test()`: Cochran-Mantel-Haenszel test.
+- `ard_survival_survfit()`: Extract Kaplan-Meier survival estimates at specific time points.
+
+---
+
+## Exercise 4.1 — Perform a Two-Sample t-test
+
+Let's compare the mean age between the Placebo and Xanomeline High Dose groups. A t-test compares exactly two groups, so we must filter out the Low Dose group first.
+
+```{r ch4-ex1, exercise=TRUE, exercise.lines=15}
+# Filter adsl to Placebo and Xanomeline High Dose only
+adsl_2groups <- adsl %>%
+  filter(TRT01A %in% c("Placebo", "Xanomeline High Dose"))
+
+# Perform t-test comparing AGE by TRT01A and format as ARD
+# Hint: use ard_stats_t_test()
+
+ard_ttest <- ___(
+  data = adsl_2groups,
+  variables = AGE,
+  by = TRT01A
+)
+
+# Look at the statistical results
+ard_ttest %>% select(stat_name, stat_label, stat_value_fmt)
+```
+
+```{r ch4-ex1-hint-1}
+# Call ard_stats_t_test on adsl_2groups
+ard_stats_t_test(adsl_2groups, variables = AGE, by = TRT01A)
+```
+
+```{r ch4-ex1-solution}
+ard_stats_t_test(adsl_2groups, variables = AGE, by = TRT01A)
+```
+
+```{r ch4-ex1-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "p.value" %in% .result$stat_name, "Correct! ard_stats_t_test generated standard test rows including p-value, confidence intervals, and the t-statistic."),
+  fail_if(~ TRUE, "Ensure you are using ard_stats_t_test() on adsl_2groups with variables = AGE and by = TRT01A.")
+)
+```
+
+---
+
+## Exercise 4.2 — Calculate Kaplan-Meier survival estimates
+
+In oncology trials, Overall Survival (OS) is a key parameter. We need to calculate KM survival estimates at month time points (6 and 12 months) from the `adtte` dataset.
+
+The variable argument must specify: `variables = c(time = "AVAL", event = "1-CNSR")` (since `CNSR = 1` is censored, and `1 - CNSR` represents event occurrence).
+
+```{r ch4-ex2, exercise=TRUE, exercise.lines=15}
+# Filter for Overall Survival (OS)
+adtte_os <- adtte %>% filter(PARAMCD == "OS")
+
+# Calculate survival estimates at Months 6 and 12, grouped by TRT01A
+# Hint: use ard_survival_survfit() and specify times = c(6, 12)
+
+ard_km_rates <- ard_survival_survfit(
+  data = adtte_os,
+  by = TRT01A,
+  variables = c(time = "AVAL", event = "1-CNSR"),
+  times = ___
+)
+
+# View results
+ard_km_rates %>% select(group1_level, variable_grp_level, stat_name, stat_value_fmt)
+```
+
+```{r ch4-ex2-hint-1}
+# Set times = c(6, 12)
+```
+
+```{r ch4-ex2-solution}
+ard_survival_survfit(
+  data = adtte_os,
+  by = TRT01A,
+  variables = c(time = "AVAL", event = "1-CNSR"),
+  times = c(6, 12)
+)
+```
+
+```{r ch4-ex2-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "survival" %in% .result$stat_name, "Incredible! You generated Kaplan-Meier survival statistics at specified time intervals. These are mapped to rows where variable_grp_level denotes the timepoint (e.g. 6 or 12)."),
+  fail_if(~ TRUE, "Check that you specify times = c(6, 12) in your ard_survival_survfit call.")
+)
+```
+
+---
+
+## Chapter 4 Knowledge Check
+
+```{r ch4-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 4 — Check Your Understanding",
+
+  question(
+    "Why is `{cardx}` developed as a separate package from `{cards}`?",
+    answer("Because `{cards}` is written in Python and `{cardx}` is in R"),
+    answer("To keep `{cards}` dependency-light and fast, isolating heavy statistical dependencies like `{survival}` inside `{cardx}`", correct = TRUE),
+    answer("There is no technical reason; they are duplicate packages"),
+    answer("To support SAS integration"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "How does `ard_survival_survfit()` represent different time points in the ARD structure?",
+    answer("In separate columns (time_6, time_12)"),
+    answer("In the `variable_grp_level` column as separate row records", correct = TRUE),
+    answer("In the `group1_level` column"),
+    answer("As list elements within a single row"),
+    allow_retry = TRUE
+  )
+)
+```
+
+---
+
+## Chapter 4 Summary {.congratulations}
+
+You now know how to:
+- Use **`{cardx}`** functions to run statistical comparisons.
+- Run a t-test and extract statistics using **`ard_stats_t_test()`**.
+- Compute Kaplan-Meier survival rates at specific timepoints using **`ard_survival_survfit()`**.
+
+**Next:** Chapter 5 — Models, `{broom}`, and `{parameters}` (Understanding regression model tidying)

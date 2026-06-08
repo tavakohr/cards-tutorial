@@ -1,0 +1,140 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 6: Consuming ARD"
+author: "Hamid Tavakoli, MD, MSc"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  Learn how to build formatted tables from pre-calculated ARDs using gtsummary and other downstream reporting engines.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(pharmaversesdtm)
+library(dplyr)
+library(cards)
+library(cardx)
+library(gtsummary)
+library(jsonlite)
+library(glue)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+```
+
+---
+
+## Chapter 6: Consuming ARD
+
+### 6.1 Downstream Table Rendering
+
+Once you have calculated statistical results and stored them in the standardized ARD format, you can pass them to downstream reporting engines to render the final table. 
+
+- **`{gtsummary}`**: Provides `tbl_ard_summary()`. This function accepts an ARD object and instantly creates a publication-ready clinical summary table. Because all statistics are already calculated, rendering takes milliseconds.
+- **`{rtables}`**: A cell-by-cell layout engine that uses ARD data frames as input to build complex, multi-level clinical tables.
+
+---
+
+## Exercise 6.1 — Render a Demographics Table from an ARD
+
+Let's calculate an ARD containing Age and Sex statistics grouped by treatment, and then pass it to `tbl_ard_summary()` to display the final clinical table.
+
+```{r ch6-ex1, exercise=TRUE, exercise.lines=20}
+# 1. Generate the ARD data frame
+ard_demog <- ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  by = TRT01A
+)
+
+# 2. Render the table using the pre-computed ARD
+# Hint: call tbl_ard_summary() passing card = ard_demog, variables = c(AGE, SEX), and by = TRT01A
+
+demog_table <- ___(
+  cards = ard_demog,
+  variables = c(AGE, SEX),
+  by = TRT01A
+)
+
+# Render table
+demog_table
+```
+
+```{r ch6-ex1-hint-1}
+# Call tbl_ard_summary(cards = ard_demog, variables = c(AGE, SEX), by = TRT01A)
+```
+
+```{r ch6-ex1-solution}
+tbl_ard_summary(
+  cards = ard_demog,
+  variables = c(AGE, SEX),
+  by = TRT01A
+)
+```
+
+```{r ch6-ex1-check}
+grade_result(
+  pass_if(~ inherits(.result, "gtsummary"), "Fantastic! `{gtsummary}` read the ARD and formatted the table. If you want to change titles or footnotes, you can do so in seconds without recalculating any statistics."),
+  fail_if(~ TRUE, "Check that you are calling tbl_ard_summary() with cards = ard_demog, variables = c(AGE, SEX), and by = TRT01A.")
+)
+```
+
+---
+
+## Chapter 6 Knowledge Check
+
+```{r ch6-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 6 — Check Your Understanding",
+
+  question(
+    "Which `{gtsummary}` function renders a formatted clinical table from a pre-calculated ARD data frame?",
+    answer("tbl_summary()"),
+    answer("tbl_ard_summary()", correct = TRUE),
+    answer("tbl_render_ard()"),
+    answer("tbl_regression()"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What is a primary advantage of separating statistical calculations (ARD) from table rendering?",
+    answer("The code runs slower but is more accurate"),
+    answer("You can tweak the table's cosmetic formatting without having to recompute expensive statistical models", correct = TRUE),
+    answer("It allows you to skip writing R code"),
+    answer("It merges R and SAS codebases"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which pharmaverse package is a powerful layout engine used for complex, nested clinical tables (like AE SOC/PT tables)?",
+    answer("ggplot2"),
+    answer("rtables", correct = TRUE),
+    answer("gtsummary"),
+    answer("datasetjson"),
+    allow_retry = TRUE
+  )
+)
+```
+
+---
+
+## Chapter 6 Summary {.congratulations}
+
+You now know:
+- The advantages of the **Separation of Concerns** paradigm in clinical reporting.
+- How to pass pre-calculated ARD objects to **`tbl_ard_summary()`** in `{gtsummary}`.
+- The role of **`{rtables}`** as a layout engine that consumes ARDs to build nested clinical tables.
+
+**Next:** Chapter 7 — Advanced Workflows (Writing custom stats and mapping to CDISC ARS JSON)

@@ -1,0 +1,177 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 1: Intro to ARD and cards"
+author: "Hamid Tavakoli, MD, MSc"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  A hands-on tutorial covering the flat Analysis Results Data (ARD) standard
+  using the cards R package and real pharmaverse datasets.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(pharmaversesdtm)
+library(dplyr)
+library(cards)
+library(cardx)
+library(jsonlite)
+library(glue)
+
+# learnr global options
+tutorial_options(
+  exercise.timelimit = 60
+)
+
+# gradethis setup
+gradethis_setup()
+
+# Load pharmaverse ADaM datasets
+data("adsl",  package = "pharmaverseadam")
+data("adae",  package = "pharmaverseadam")
+data("adtte_onco", package = "pharmaverseadam")
+adtte <- adtte_onco %>%
+  left_join(
+    adsl %>%
+      mutate(ITTFL = ifelse(!is.na(ARM) & ARM != "", "Y", "N")) %>%
+      select(USUBJID, TRT01A, ITTFL),
+    by = "USUBJID"
+  )
+data("adlb",  package = "pharmaverseadam")
+
+# Pre-filter datasets
+adsl_safe <- adsl %>% filter(SAFFL == "Y")
+adsl_itt  <- adsl %>% filter(!is.na(ARM) & ARM != "")
+adae_teae <- adae %>% filter(TRTEMFL == "Y")
+
+# Load sample ARD JSON
+ard_json <- jsonlite::read_json("data/adsl_demog_ard.json")
+```
+
+---
+
+## Chapter 1: Intro to ARD and cards
+
+### 1.1 Tidy Results vs. Static Displays
+
+Traditionally, tables, figures, and listings (TFLs) are rendered directly into formatted PDF or RTF files. If a reviewer needs to run an audit or re-calculate a percentage, they must manually extract numbers from text boxes or recreate the calculation code. 
+
+**Analysis Results Data (ARD)** separates the calculation of numbers from the formatting of those numbers into table layout structures. An ARD is a simple, standardized, flat table where every computed statistic lives on its own row, capturing the raw numeric precision (`stat_value`) alongside its rounded, formatted display string (`stat_value_fmt`).
+
+---
+
+### 1.2 The `{cards}` Schema
+
+The `{cards}` package is the foundational tool for generating ARDs in R. Every function in `{cards}` returns a data frame containing standard columns:
+
+- `group1`, `group1_level`: The grouping factor name and value (e.g., `TRT01A` and `Placebo`).
+- `variable`: The variable being summarized (e.g., `AGE`).
+- `variable_grp`, `variable_grp_level`: The categorical variable sub-group and level (e.g., `SEX` and `F`).
+- `stat_name`, `stat_label`: The statistical name (e.g., `mean`) and its display label (e.g., `Mean`).
+- `stat_value`, `stat_value_fmt`: The raw, full-precision statistic (stored in a list-column) and its formatted text representation.
+
+---
+
+## Exercise 1.1 — Explore the Scale of the Input Data
+
+Before generating an ARD, let's explore our input data. We are working with the `adsl` subject-level dataset from the `{pharmaverseadam}` package. Let's find out how many unique subjects and treatment arms are in the Safety Population (`SAFFL == 'Y'`).
+
+```{r ch1-ex1, exercise=TRUE, exercise.lines=8}
+# Count the number of subjects in the Safety Population (SAFFL == "Y") 
+# and list the unique values of TRT01A (Treatment Arm).
+
+adsl %>%
+  filter(SAFFL == "Y") %>%
+  distinct(TRT01A)
+```
+
+```{r ch1-ex1-check}
+grade_result(
+  pass_if(~ nrow(.result) == 3, "Correct! There are 3 treatment groups in the safety population. Each group will require separate statistic rows in our generated ARD."),
+  fail_if(~ TRUE, "Try filtering where SAFFL == 'Y' and retrieving distinct TRT01A values.")
+)
+```
+
+---
+
+## Exercise 1.2 — Parse the ARD JSON structure
+
+A pre-calculated ARD has been loaded as `ard_json` (parsed from `data/adsl_demog_ard.json`). Explore the structure of the first row of this ARD.
+
+```{r ch1-ex2, exercise=TRUE, exercise.lines=6}
+# Print the first item of the ard_json list to see the column structure.
+# Hint: use double square brackets [[1]]
+
+ard_json[[___]]
+```
+
+```{r ch1-ex2-hint-1}
+# Access the first element using list indexing:
+ard_json[[1]]
+```
+
+```{r ch1-ex2-solution}
+ard_json[[1]]
+```
+
+```{r ch1-ex2-check}
+grade_result(
+  pass_if(~ .result$variable == "AGE" && .result$stat_name == "n", "Great! The first row represents the count (n) of the AGE variable for the Placebo group."),
+  fail_if(~ TRUE, "Try retrieving the first element using: ard_json[[1]]")
+)
+```
+
+---
+
+## Chapter 1 Knowledge Check
+
+```{r ch1-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 1 — Check Your Understanding",
+
+  question(
+    "What is the main goal of Analysis Results Data (ARD)?",
+    answer("To replace SDTM and ADaM datasets"),
+    answer("To separate statistical calculations from presentation formatting", correct = TRUE),
+    answer("To generate RTF files directly from SAS"),
+    answer("To store raw clinical trial study design files"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why does the ARD store BOTH stat_value and stat_value_fmt?",
+    answer("Because stat_value is for SAS and stat_value_fmt is for R"),
+    answer("stat_value is for double-precision calculations and QC; stat_value_fmt is the formatted text for display", correct = TRUE),
+    answer("To save space in the R session"),
+    answer("They are identical, kept only for backward compatibility"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which column in a standard `{cards}` ARD holds the unrounded statistic?",
+    answer("stat_name"),
+    answer("stat_value", correct = TRUE),
+    answer("stat_value_fmt"),
+    answer("variable_grp"),
+    allow_retry = TRUE
+  )
+)
+```
+
+---
+
+## Chapter 1 Summary {.congratulations}
+
+You now understand:
+- The concept of **Analysis Results Data (ARD)**.
+- Why separating calculations from presentation is essential for automation and quality control.
+- The columns that compose the standard `{cards}` ARD schema.
+- The difference between `stat_value` (raw value in a list-column) and `stat_value_fmt` (formatted character string).
+
+**Next:** Chapter 2 — Core `{cards}` Operations (`ard_continuous`, `ard_categorical`, etc.)
