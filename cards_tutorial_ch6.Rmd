@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 6: Consuming ARD"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.3
+  version: 1.4
 output:
   learnr::tutorial:
     progressive: true
@@ -35,12 +35,16 @@ gradethis_setup()
 # Load datasets
 data("adsl",  package = "pharmaverseadam")
 
+# Add a missing value to test missing replacements
+adsl$AGE[1] <- NA
+
 # Pre-compute an ARD for downstream exercises to save time
 ard_demog_pre <- ard_stack(
   data = adsl,
   ard_continuous(variables = AGE),
   ard_categorical(variables = SEX),
-  .by = TRT01A
+  .by = TRT01A,
+  .missing = TRUE
 )
 ```
 
@@ -53,13 +57,22 @@ ard_demog_pre <- ard_stack(
 Once you have calculated statistical results and stored them in the standardized ARD format, you can pass them to downstream reporting engines to render the final table. 
 
 - **`{gtsummary}`**: Provides `tbl_ard_summary()`. This function accepts an ARD object and instantly creates a publication-ready clinical summary table. Because all statistics are already calculated, rendering takes milliseconds.
-- **`{rtables}`**: A cell-by-cell layout engine that uses ARD data frames as input to build complex, multi-level clinical tables.
 
 ---
 
 ## Exercise 6.1 — Render a Demographics Table from an ARD
 
-Let's calculate an ARD containing Age and Sex statistics grouped by treatment, and then pass it to `tbl_ard_summary()` to display the final clinical table.
+Before we run the exercise, let's exhaustively review the parameters of `tbl_ard_summary()`:
+- `cards`: An ARD object of class `card` (typically created with `ard_stack()`).
+- `by`: A single column to stratify the summary statistics by (Note: NO leading dot, unlike `ard_stack()`).
+- `include`: Variables to include in the summary table (e.g., `c(AGE, SEX)`).
+- `statistic`: A formula specifying the summary statistics for each variable.
+- `type`: Specifies the summary type (`"continuous"`, `"continuous2"`, `"categorical"`, `"dichotomous"`).
+- `label`: Overrides default labels in the summary table (e.g., `list(AGE = "Age, years")`).
+- `missing`: Dictates if missing values are presented (`"no"`, `"ifany"`, `"always"`).
+- `missing_text`: String indicating text shown on the missing row.
+- `missing_stat`: Statistic to show on the missing row.
+- `overall`: When `TRUE`, appends an overall column (requires `ard_stack(.overall = TRUE)`).
 
 ```{r ch6-ex1, exercise=TRUE, exercise.lines=20}
 # 1. Generate the ARD data frame
@@ -67,16 +80,18 @@ ard_demog <- ard_stack(
   data = adsl,
   ard_continuous(variables = AGE),
   ard_categorical(variables = SEX),
-  .by = TRT01A
+  .by = TRT01A,
+  .missing = TRUE
 )
 
 # 2. Render the table using the pre-computed ARD
-# Hint: call tbl_ard_summary() passing card = ard_demog, include = c(AGE, SEX), and by = TRT01A
+# Hint: call tbl_ard_summary() passing card = ard_demog, include = c(AGE, SEX), by = TRT01A, missing = "always"
 
 demog_table <- ___(
   cards = ard_demog,
   include = c(AGE, SEX),
-  by = TRT01A
+  by = TRT01A,
+  missing = "always"
 )
 
 # Render table
@@ -84,21 +99,22 @@ demog_table
 ```
 
 ```{r ch6-ex1-hint-1}
-# Call tbl_ard_summary(cards = ard_demog, include = c(AGE, SEX), by = TRT01A)
+# Call tbl_ard_summary(cards = ard_demog, include = c(AGE, SEX), by = TRT01A, missing = "always")
 ```
 
 ```{r ch6-ex1-solution}
 tbl_ard_summary(
   cards = ard_demog,
   include = c(AGE, SEX),
-  by = TRT01A
+  by = TRT01A,
+  missing = "always"
 )
 ```
 
 ```{r ch6-ex1-check}
 grade_result(
   pass_if(~ inherits(.result, "gtsummary"), "Fantastic! `{gtsummary}` read the ARD and formatted the table. If you want to change titles or footnotes, you can do so in seconds without recalculating any statistics."),
-  fail_if(~ TRUE, "Check that you are calling tbl_ard_summary() with cards = ard_demog, include = c(AGE, SEX), and by = TRT01A.")
+  fail_if(~ TRUE, "Check that you are calling tbl_ard_summary() with cards = ard_demog, include = c(AGE, SEX), by = TRT01A, and missing = \"always\".")
 )
 ```
 
@@ -106,17 +122,19 @@ grade_result(
 
 ## Exercise 6.2 — Apply a Global Theme
 
-`{gtsummary}` comes with built-in themes that automatically adjust padding, borders, and typography to meet specific journal guidelines (like JAMA or NEJM) or layout needs (like a compact view).
+Before generating your table, you can set a global theme to adhere to specific journal or organizational standards. 
 
-You must call the theme function **before** creating the table.
+- **`theme_gtsummary_journal()`**: Takes a `journal` argument (e.g., `"jama"`, `"nejm"`, `"lancet"`).
+- **`theme_gtsummary_compact()`**: Reduces font size and cell padding for large tables.
+- **`reset_gtsummary_theme()`**: Clears all themes.
 
 ```{r ch6-ex2, exercise=TRUE, exercise.lines=15}
 # Set the global theme to "jama" (Journal of the American Medical Association)
-# Hint: Call theme_gtsummary_journal("jama")
+# Hint: Call theme_gtsummary_journal(journal = "jama")
 
 ___
 
-# Render the table (we use ard_demog_pre which was pre-calculated for you)
+# Render the table
 tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
@@ -125,11 +143,11 @@ tbl_ard_summary(
 ```
 
 ```{r ch6-ex2-hint-1}
-# Call theme_gtsummary_journal("jama") at the top of the block.
+# Call theme_gtsummary_journal(journal = "jama") at the top of the block.
 ```
 
 ```{r ch6-ex2-solution}
-theme_gtsummary_journal("jama")
+theme_gtsummary_journal(journal = "jama")
 
 tbl_ard_summary(
   cards = ard_demog_pre,
@@ -141,17 +159,20 @@ tbl_ard_summary(
 ```{r ch6-ex2-check}
 grade_result(
   pass_if(~ inherits(.result, "gtsummary"), "Great job! Setting a theme changes global aesthetics instantly without touching the underlying statistical data."),
-  fail_if(~ TRUE, "Ensure you called theme_gtsummary_journal(\"jama\") before rendering.")
+  fail_if(~ TRUE, "Ensure you called theme_gtsummary_journal(journal = \"jama\") before rendering.")
 )
 ```
 
 ---
 
-## Exercise 6.3 — Modify Table Aesthetics
+## Exercise 6.3 — Standard Aesthetics
 
-You can pipe `tbl_ard_summary()` into various modifier functions to change table headers, add spanning titles, or bold variables.
+The core engine behind all styling in `{gtsummary}` is **`modify_table_styling()`**. It has 15 parameters including `columns`, `rows`, `label`, `hide`, `footnote`, `align`, `missing_symbol`, `fmt_fun`, and `text_interpret`.
 
-Modify the table below by bolding the variable labels and adding a spanning header over the statistic columns.
+However, `{gtsummary}` provides convenient wrappers for standard typography and headers. Let's practice them:
+- **`modify_header()`**: Modifies column headers.
+- **`modify_spanning_header()`**: Adds headers that group multiple columns together.
+- **`bold_labels()`** and **`italicize_levels()`**: Require no arguments, applying globally to row headers.
 
 ```{r ch6-ex3, exercise=TRUE, exercise.lines=15}
 tbl_ard_summary(
@@ -161,8 +182,8 @@ tbl_ard_summary(
 ) %>%
   # Bold the row labels (AGE, SEX)
   ___() %>%
-  # Add a spanning header over the columns
-  # Hint: use modify_spanning_header(all_stat_cols() ~ "**Treatment Group**")
+  # Add a spanning header over the columns using modify_spanning_header
+  # Hint: use all_stat_cols() ~ "**Treatment Group**"
   ___
 ```
 
@@ -189,11 +210,77 @@ grade_result(
 
 ---
 
-## Exercise 6.4 — Exporting the Table
+## Exercise 6.4 — Advanced Table Styling (Missing, Formatting, and Abbreviations)
+
+Now let's use the advanced wrapper functions mapping to `modify_table_styling()`. 
+
+- **`modify_abbreviation()`**: A specialized footnote function for defining acronyms in the footer.
+- **`modify_missing_symbol()`**: Replaces `NA` blanks in the table body with a specific character string (`missing_symbol` argument).
+- **`modify_fmt_fun()`**: Updates the formatting function for specific statistics *after* the table is generated.
+- **`text_interpret` parameter**: Instructs `{gtsummary}` to interpret strings as `"md"` (markdown) or `"html"`. Available in all `modify_*` wrappers!
+
+Use these parameters below to heavily customize our table!
+
+```{r ch6-ex4, exercise=TRUE, exercise.lines=25}
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A,
+  missing = "always"
+) %>%
+  # 1. Update the header using markdown, setting text_interpret to "md"
+  modify_header(
+    label = "**Demographics**",
+    text_interpret = "md"
+  ) %>%
+  # 2. Add an abbreviation to the footer
+  # Hint: modify_abbreviation(all_stat_cols() ~ "TRT = Treatment")
+  ___ %>%
+  # 3. Replace the NA missing count blanks with the text "Not Assessed"
+  # Hint: modify_missing_symbol(missing_symbol = "Not Assessed")
+  ___ %>%
+  # 4. Change the formatting of the continuous statistic to 2 decimal places
+  # Hint: modify_fmt_fun(update = all_continuous() ~ style_number)
+  ___
+```
+
+```{r ch6-ex4-hint-1}
+# Chain:
+# modify_abbreviation(all_stat_cols() ~ "TRT = Treatment") %>%
+# modify_missing_symbol(missing_symbol = "Not Assessed") %>%
+# modify_fmt_fun(update = all_continuous() ~ style_number)
+```
+
+```{r ch6-ex4-solution}
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A,
+  missing = "always"
+) %>%
+  modify_header(
+    label = "**Demographics**",
+    text_interpret = "md"
+  ) %>%
+  modify_abbreviation(all_stat_cols() ~ "TRT = Treatment") %>%
+  modify_missing_symbol(missing_symbol = "Not Assessed") %>%
+  modify_fmt_fun(update = all_continuous() ~ style_number)
+```
+
+```{r ch6-ex4-check}
+grade_result(
+  pass_if(~ inherits(.result, "gtsummary"), "Incredible! You have mastered the advanced styling API of `{gtsummary}`!"),
+  fail_if(~ TRUE, "Ensure you chained modify_abbreviation(), modify_missing_symbol(), and modify_fmt_fun() correctly.")
+)
+```
+
+---
+
+## Exercise 6.5 — Exporting the Table
 
 Clinical tables need to be exported to Microsoft Word, RTF, or PDF. `{gtsummary}` integrates seamlessly with the `{flextable}` package for Word outputs.
 
-```{r ch6-ex4, exercise=TRUE, exercise.lines=12}
+```{r ch6-ex5, exercise=TRUE, exercise.lines=12}
 # 1. Create the base table
 my_table <- tbl_ard_summary(
   cards = ard_demog_pre,
@@ -209,16 +296,16 @@ flex_out <- ___
 flex_out
 ```
 
-```{r ch6-ex4-hint-1}
+```{r ch6-ex5-hint-1}
 # flex_out <- my_table %>% as_flex_table()
 ```
 
-```{r ch6-ex4-solution}
+```{r ch6-ex5-solution}
 flex_out <- my_table %>% as_flex_table()
 flex_out
 ```
 
-```{r ch6-ex4-check}
+```{r ch6-ex5-check}
 grade_result(
   pass_if(~ inherits(.result, "flextable"), "Success! Converting to a flextable object is the final step before exporting to .docx."),
   fail_if(~ TRUE, "Ensure you pipe my_table into as_flex_table().")
@@ -234,20 +321,20 @@ quiz(
   caption = "Chapter 6 — Check Your Understanding",
 
   question(
-    "Which `{gtsummary}` function renders a formatted clinical table from a pre-calculated ARD data frame?",
-    answer("tbl_summary()"),
-    answer("tbl_ard_summary()", correct = TRUE),
-    answer("tbl_render_ard()"),
-    answer("tbl_regression()"),
+    "Which `{gtsummary}` parameter explicitly replaces `NA` missing values with a string character?",
+    answer("modify_header()"),
+    answer("modify_missing_symbol()", correct = TRUE),
+    answer("missing_text"),
+    answer("theme_gtsummary_journal()"),
     allow_retry = TRUE
   ),
 
   question(
-    "What is a primary advantage of separating statistical calculations (ARD) from table rendering?",
-    answer("The code runs slower but is more accurate"),
-    answer("You can tweak the table's cosmetic formatting without having to recompute expensive statistical models", correct = TRUE),
-    answer("It allows you to skip writing R code"),
-    answer("It merges R and SAS codebases"),
+    "Which argument is used within `modify_header()` to ensure asterisks are rendered as bold text?",
+    answer("label"),
+    answer("text_interpret = \"md\"", correct = TRUE),
+    answer("fmt_fun"),
+    answer("bold_labels()"),
     allow_retry = TRUE
   ),
   
@@ -268,9 +355,9 @@ quiz(
 
 You now know:
 - The advantages of the **Separation of Concerns** paradigm in clinical reporting.
-- How `{gtsummary}` maps ARD variables and stats to rows and columns natively.
-- How to apply global themes using **`theme_gtsummary_*()`**.
-- How to format tables dynamically using modifiers like **`modify_spanning_header()`**.
+- The exhaustive parameters of `tbl_ard_summary()` (`missing`, `label`, `statistic`).
+- The low-level `modify_table_styling()` engine and advanced wrappers (`modify_fmt_fun`, `modify_abbreviation`, `modify_missing_symbol`).
+- The usage of `text_interpret = "md"` to process markdown syntaxes.
 - How to export tables using **`as_flex_table()`**.
 
 **Next:** Chapter 7 — Advanced Workflows (Writing custom stats and mapping to CDISC ARS JSON)

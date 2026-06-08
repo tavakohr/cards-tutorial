@@ -20,7 +20,16 @@ ard_demog <- bind_ard(ard_age, ard_sex)
 ```
 
 ### 2. `ard_stack()`
-`ard_stack()` is a convenient, high-level helper that lets you run multiple types of ARD summaries on a dataset in a single call. You specify which variables get continuous summaries and which get categorical summaries.
+`ard_stack()` is a convenient, high-level helper that lets you run multiple types of ARD summaries on a dataset in a single call. 
+
+#### Exhaustive Parameter List
+- `data`: The data frame.
+- `...`: The ARD functions to stack (e.g., `ard_continuous()`, `ard_categorical()`).
+- `.by`: The grouping variable to pass down to the underlying ARDs. Note the leading dot (to distinguish from the `by` argument used internally).
+- `.attributes`: Logical. When `TRUE`, includes variable labels from the dataset.
+- `.missing`: Logical. When `TRUE`, calculates missing counts for downstream use.
+- `.total_n`: Logical. When `TRUE`, calculates the total N for downstream headers.
+- `.overall`: Logical. When `TRUE`, calculates unstratified overall statistics.
 
 ```r
 ard_demog <- ard_stack(

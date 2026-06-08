@@ -42,6 +42,13 @@ Most clinical trial tables present more than one variable. In `{cards}`, you gen
 
 - **`bind_ard()`**: Combines multiple ARD datasets. It validates the ARD structure and checks for duplicate rows (e.g., repeating the same analysis statistic for the same group and variable).
 - **`ard_stack()`**: A wrapper that lets you perform continuous and categorical calculations in a single function call.
+  - `data`: The data frame.
+  - `...`: The ARD functions to stack (e.g., `ard_continuous()`, `ard_categorical()`).
+  - `.by`: The grouping variable to pass down to the underlying ARDs. Note the leading dot (to distinguish from the `by` argument used internally).
+  - `.attributes`: Logical. When `TRUE`, includes variable labels from the dataset.
+  - `.missing`: Logical. When `TRUE`, calculates missing counts for downstream use.
+  - `.total_n`: Logical. When `TRUE`, calculates the total N for downstream headers.
+  - `.overall`: Logical. When `TRUE`, calculates unstratified overall statistics.
 
 ---
 

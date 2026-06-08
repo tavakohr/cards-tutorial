@@ -1,10 +1,8 @@
-# Chapter 6 — Consuming ARD
+# Chapter 6 — Consuming ARD & Advanced Table Styling
 
 ## 6.1 The Rationale for Separation
 
-In traditional workflows, table formatting (adding grid lines, bolding headers, indentation, and alignment) and data calculations occur in the same script. If a statistician requests a minor cosmetic change, the programmer must re-run the entire program. If the dataset is large or the model-fitting is computationally intensive (e.g., bootstrapped models or mixed models), this wastes substantial time and computing power.
-
-By using Analysis Results Data (ARD) as a middle layer, we enforce a strict separation of concerns:
+By using Analysis Results Data (ARD) as a middle layer, we enforce a strict separation of concerns between statistical calculations and visual presentation.
 
 ```
   ADaM Data 
@@ -17,89 +15,121 @@ By using Analysis Results Data (ARD) as a middle layer, we enforce a strict sepa
   HTML Table              Word/RTF Table
 ```
 
-### Advantages of the ARD Middle Layer:
 1. **Compute Once, Render Many:** Calculate the statistics once. You can render that exact same ARD to HTML, PDF, RTF, or Word without ever re-running a statistical function.
 2. **Simplified QC:** Double-programming QC is done by comparing the flat ARD datasets. If the numbers in the ARD match, the formatting step is guaranteed to display the correct numbers.
-3. **Traceability:** The ARD links every displayed cell back to the specific ADaM input, group, and variable.
 
 ---
 
-## 6.2 How an ARD Transforms to `{gtsummary}`
+## 6.2 The `tbl_ard_summary()` Function
 
-The `{gtsummary}` package has been re-engineered to use the ARD schema as its core data model. 
+The `{gtsummary}` package has been re-engineered to use the ARD schema as its core data model. When you pass an ARD to **`tbl_ard_summary()`**, it uses the ARD to instantly construct the table.
 
-When you pass an ARD to **`tbl_ard_summary()`**, `{gtsummary}` queries the ARD object to construct the table:
-1. **Row Creation:** It reads the `variable` and `variable_level` columns to generate the table's rows and indented sub-rows.
-2. **Column Creation:** It reads the grouping variables (e.g., `group1_level`) to generate the table columns (e.g., Treatment A, Treatment B).
-3. **Cell Population:** It reads the `stat_name` (e.g., `"mean"`) and pulls the pre-formatted display text directly from the `stat_fmt` column. 
+### Exhaustive Parameter List
+- `cards`: An ARD object of class `card` (typically created with `ard_stack()`).
+- `by`: A single column to stratify the summary statistics by (Note: NO leading dot, unlike `ard_stack()`).
+- `include`: Variables to include in the summary table (e.g., `c(AGE, SEX)`).
+- `statistic`: A formula specifying the summary statistics for each variable (e.g., `list(all_continuous() ~ "{median} ({p25}, {p75})")`).
+- `type`: Specifies the summary type (`"continuous"`, `"continuous2"`, `"categorical"`, `"dichotomous"`).
+- `label`: Overrides default labels in the summary table (e.g., `list(AGE = "Age, years")`).
+- `missing`: Dictates if missing values are presented (`"no"`, `"ifany"`, `"always"`).
+- `missing_text`: String indicating text shown on the missing row (default is `"Unknown"`).
+- `missing_stat`: Statistic to show on the missing row (default is `"{N_miss}"`).
+- `overall`: When `TRUE`, appends an overall column (requires you ran `ard_stack(.overall = TRUE)` previously).
 
-Because `tbl_ard_summary()` does not run any calculations itself, it executes instantly.
-
----
-
-## 6.3 Comprehensive `{gtsummary}` Workflows
-
-Once the table is generated, you can style, format, and export it.
-
-### 1. Generating the Base Table
+### Example
 ```r
-library(gtsummary)
-library(cards)
-
-# 1. Calculate the ARD
 ard_data <- ard_stack(
   data = adsl,
   ard_continuous(variables = AGE),
-  ard_categorical(variables = c(SEX, RACE)),
-  .by = TRT01A
+  ard_categorical(variables = SEX),
+  .by = TRT01A,
+  .overall = TRUE,
+  .missing = TRUE
 )
 
-# 2. Render the base table using the pre-computed ARD
 base_table <- tbl_ard_summary(
   cards = ard_data,
   by = TRT01A,
-  include = c(AGE, SEX, RACE)
-) %>%
-  add_overall()
+  include = c(AGE, SEX),
+  overall = TRUE,
+  missing = "always",
+  missing_text = "Missing Count"
+)
 ```
 
-### 2. Setting Global Themes
-Before generating your table, you can set a global theme to adhere to specific journal or organizational standards. Themes automatically adjust padding, borders, and number formatting.
+---
 
-```r
-# Apply a compact theme (reduces padding, good for large tables)
-theme_gtsummary_compact()
+## 6.3 Advanced Table Styling: `modify_table_styling()`
 
-# Apply a journal-specific theme (e.g., JAMA, Lancet, NEJM)
-theme_gtsummary_journal("jama")
+While `{gtsummary}` provides easy wrapper functions, the core engine behind *all* text formatting, abbreviations, missing value replacement, and cell styling is **`modify_table_styling()`**.
 
-# Reset to default
-reset_gtsummary_theme()
-```
+### Exhaustive Parameter List
+- `x`: The gtsummary object.
+- `columns`: The columns to style (e.g., `all_stat_cols()`).
+- `rows`: A condition evaluating to TRUE/FALSE to style specific rows (e.g., `variable == "AGE"`).
+- `label`: Update column headers.
+- `spanning_header`: Add spanning headers over columns.
+- `hide`: Logical. If `TRUE`, hides the targeted column.
+- `footnote`: String. Adds a footnote to the targeted column/row.
+- `footnote_abbrev`: String. Adds abbreviation footnotes (e.g., `"CI = Confidence Interval"`).
+- `align`: Set column alignment (`"left"`, `"right"`, `"center"`).
+- `missing_symbol`: Replace missing or `NA` values with a string (e.g., `"Not Assessed"`).
+- `fmt_fun`: Define the formatting function for the cell (e.g., `style_number` or custom function).
+- `text_format`: Apply text formatting (`"bold"`, `"italic"`).
+- `undo_text_format`: Remove formatting.
+- `indent`: Add indentation to rows.
+- `text_interpret`: Instructions for rendering markdown (`"md"`) or HTML (`"html"`). Default is `"md"`.
+- `cols_merge_pattern`: Merge columns using glue syntax.
 
-### 3. Aesthetic Modifiers
-`{gtsummary}` provides a suite of modifier functions to change table text, headers, and footnotes instantly.
+### The Wrapper Functions
 
+Instead of writing massive `modify_table_styling()` calls, `{gtsummary}` exports convenient wrappers that target specific features. **All of these wrappers accept the `text_interpret` parameter**:
+
+- **`modify_header()`**: Modifies column headers.
+  - `stat_by`: Formula targeting stratified columns (e.g., `all_stat_cols() ~ "**{level}**"`).
+  - `text_interpret`: Set to `"md"` to parse asterisks as bold text.
+- **`modify_spanning_header()`**: Adds headers that group multiple columns together.
+- **`modify_footnote()`**: Attaches a footnote symbol to specific columns or rows.
+- **`modify_abbreviation()`**: A specialized footnote function for defining acronyms in the footer.
+- **`modify_missing_symbol()`**: Replaces `NA` blanks in the table body with a specific character string (like `"ND"` or `"-"`).
+- **`modify_fmt_fun()`**: Updates the formatting function for specific statistics *after* the table is generated (e.g., changing from 1 decimal to 2).
+
+### Styling Example
 ```r
 styled_table <- base_table %>%
-  # Modify main column headers (use markdown ** for bold)
+  # Headers
   modify_header(
-    label = "**Demographic Characteristic**",
-    all_stat_cols() ~ "**{level}**  \n(N = {n})"
+    label = "**Demographic**",
+    text_interpret = "md"
   ) %>%
-  # Add a spanning header over all statistic columns
-  modify_spanning_header(all_stat_cols() ~ "**Treatment Group**") %>%
-  # Add footnotes
-  modify_footnote(all_stat_cols() ~ "Data collected at baseline.") %>%
-  modify_caption("Table 14.1.1: Demographic Characteristics") %>%
-  # Bold the variable names (AGE, SEX)
+  # Missing Values
+  modify_missing_symbol(
+    missing_symbol = "Not Assessed"
+  ) %>%
+  # Abbreviations
+  modify_abbreviation(
+    all_stat_cols() ~ "TRT = Treatment"
+  ) %>%
+  # Typography
   bold_labels() %>%
-  # Italicize the variable levels (Male, Female)
   italicize_levels()
 ```
 
-### 4. Exporting the Table
-Clinical outputs are rarely delivered as R consoles or interactive HTMLs. `{gtsummary}` tables can be easily exported using external rendering engines.
+---
+
+## 6.4 Setting Global Themes
+
+Before generating your table, you can set a global theme to adhere to specific journal or organizational standards. 
+
+- **`theme_gtsummary_journal()`**: Takes a `journal` argument (`"jama"`, `"nejm"`, `"lancet"`).
+- **`theme_gtsummary_compact()`**: Reduces font size and cell padding for large tables.
+- **`reset_gtsummary_theme()`**: Clears all themes.
+
+---
+
+## 6.5 Exporting the Table
+
+`{gtsummary}` tables can be easily exported using external rendering engines.
 
 **To Microsoft Word (via `{flextable}`):**
 ```r
@@ -118,25 +148,3 @@ styled_table %>%
   as_gt() %>%
   gtsave(filename = "table_14_1_1.rtf")
 ```
-
----
-
-## 6.4 Consuming ARD with `{rtables}`
-
-While `{gtsummary}` is excellent for standard summaries and regressions, `{rtables}` is a powerful layout engine developed by Roche (Insights Engineering) specifically for generating complex, multi-level clinical tables (like adverse event tables with nested SOC/PT rows).
-
-`{rtables}` uses a grid-based layout specification. It has direct integrations to build table cells by reading values from `{cards}` ARD objects:
-- You define the grid layout (columns, rows, nesting).
-- You populate the cells by querying the ARD object's `stat_fmt` column.
-- `{rtables}` handles the text wrapping, column widths, page breaks, and rendering to text, RTF, or PDF formats.
-
-This makes ARD the universal exchange format across the entire pharmaverse reporting ecosystem.
-
----
-
-## Chapter 6 Summary
-
-- **Separation of Concerns:** Calculate once in `{cards}`, render multiple times downstream.
-- **Internal Mapping:** `{gtsummary}` builds rows from `variable_level`, columns from `group1_level`, and populates cells using `stat_fmt`.
-- **Theming & Styling:** Use `theme_gtsummary_*()` globally, and `modify_*()` functions on the pipeline to control aesthetics.
-- **Exporting:** Convert to `{flextable}` for Word (`.docx`), or `{gt}` for RTF/HTML outputs.
