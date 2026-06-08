@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 6: Consuming ARD"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.8
+  version: 1.9
 output:
   learnr::tutorial:
     progressive: true
@@ -257,7 +257,7 @@ tbl_ard_summary(
     text_interpret = "md"
   ) %>%
   # 2. Add an abbreviation to the footer
-  # Hint: modify_abbreviation(all_stat_cols() ~ "TRT = Treatment")
+  # Hint: modify_abbreviation("TRT = Treatment")
   ___ %>%
   # 3. Replace the NA missing count blanks with the text "Not Assessed"
   # Hint: modify_missing_symbol(all_stat_cols(), symbol = "Not Assessed", rows = !is.na(variable))
@@ -269,7 +269,7 @@ tbl_ard_summary(
 
 ```{r ch6-ex4-hint-1}
 # Chain:
-# modify_abbreviation(all_stat_cols() ~ "TRT = Treatment") %>%
+# modify_abbreviation("TRT = Treatment") %>%
 # modify_missing_symbol(all_stat_cols(), symbol = "Not Assessed", rows = !is.na(variable)) %>%
 # modify_fmt_fun(update = all_continuous() ~ style_number)
 ```
@@ -285,7 +285,7 @@ tbl_ard_summary(
     label = "**Demographics**",
     text_interpret = "md"
   ) %>%
-  modify_abbreviation(all_stat_cols() ~ "TRT = Treatment") %>%
+  modify_abbreviation("TRT = Treatment") %>%
   modify_missing_symbol(all_stat_cols(), symbol = "Not Assessed", rows = !is.na(variable)) %>%
   modify_fmt_fun(update = all_continuous() ~ style_number)
 ```

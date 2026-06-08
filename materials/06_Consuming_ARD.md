@@ -129,9 +129,7 @@ styled_table <- base_table %>%
     rows = !is.na(variable)
   ) %>%
   # Abbreviations
-  modify_abbreviation(
-    all_stat_cols() ~ "TRT = Treatment"
-  ) %>%
+  modify_abbreviation("TRT = Treatment") %>%
   # Typography
   bold_labels() %>%
   italicize_levels()
