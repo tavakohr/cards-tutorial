@@ -2,6 +2,8 @@
 title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 2: Core cards Operations"
 author: "Hamid Tavakoli, MD, MSc"
+tutorial:
+  version: 1.1
 output:
   learnr::tutorial:
     progressive: true
@@ -118,33 +120,33 @@ grade_result(
 
 ## Exercise 2.3 — Summarize Dichotomous Flag Variables
 
-Clinical data contains many flag variables (like `SAFFL = "Y"` or `COMPLFL = "Y"`). We often only want to show the positive indicator in our table. Use `ard_dichotomous()` to summarize the `COMPLFL` (Completed Study Flag) variable for the `"Y"` level, grouped by `TRT01A`.
+Clinical data contains many flag variables (like `SAFFL = "Y"`). We often only want to show the positive indicator in our table. Use `ard_dichotomous()` to summarize the `SAFFL` (Safety Population Flag) variable for the `"Y"` level, grouped by `TRT01A`.
 
-```{r ch2-ex3, exercise=TRUE, exercise.lines=10}
-# Summarize COMPLFL where value is "Y"
-# Hint: use ard_dichotomous() and specify value = list(COMPLFL = "Y")
+```{r ch2-ex3, exercise=TRUE, exercise.lines=15}
+# Summarize SAFFL where value is "Y"
+# Hint: use ard_dichotomous() and specify value = list(SAFFL = "Y")
 
 ard_dichotomous(
   data = adsl,
-  variables = COMPLFL,
-  value = list(COMPLFL = ___),
-  by = TRT01A
+  by = TRT01A,
+  variables = SAFFL,
+  value = list(SAFFL = ___)
 )
 ```
 
 ```{r ch2-ex3-hint-1}
-# Supply "Y" to the COMPLFL item in the value list
-ard_dichotomous(adsl, variables = COMPLFL, value = list(COMPLFL = "Y"), by = TRT01A)
+# Supply "Y" to the SAFFL item in the value list
+ard_dichotomous(adsl, variables = SAFFL, value = list(SAFFL = "Y"), by = TRT01A)
 ```
 
 ```{r ch2-ex3-solution}
-ard_dichotomous(adsl, variables = COMPLFL, value = list(COMPLFL = "Y"), by = TRT01A)
+ard_dichotomous(adsl, variables = SAFFL, value = list(SAFFL = "Y"), by = TRT01A)
 ```
 
 ```{r ch2-ex3-check}
 grade_result(
   pass_if(~ is.data.frame(.result) && !("N" %in% .result$variable_grp_level), "Superb! ard_dichotomous kept only the rows for the 'Y' level, saving space and simplifying downstream table generation."),
-  fail_if(~ TRUE, "Make sure you set value = list(COMPLFL = 'Y') inside ard_dichotomous.")
+  fail_if(~ TRUE, "Make sure you set value = list(SAFFL = 'Y') inside ard_dichotomous.")
 )
 ```
 

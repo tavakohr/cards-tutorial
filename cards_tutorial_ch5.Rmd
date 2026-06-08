@@ -2,6 +2,8 @@
 title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 5: Models, broom, and parameters"
 author: "Hamid Tavakoli, MD, MSc"
+tutorial:
+  version: 1.1
 output:
   learnr::tutorial:
     progressive: true
@@ -36,7 +38,7 @@ data("adsl",  package = "pharmaverseadam")
 # Pre-fit model for use in exercises
 fit_logistic <- glm(
   COMPLFL ~ TRT01A + AGE, 
-  data = adsl %>% mutate(COMPLFL = ifelse(COMPLFL == "Y", 1, 0)), 
+  data = adsl %>% mutate(COMPLFL = ifelse(EOSSTT == "COMPLETED", 1, 0)), 
   family = binomial()
 )
 ```

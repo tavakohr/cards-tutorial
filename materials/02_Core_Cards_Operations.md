@@ -52,11 +52,11 @@ If you use `ard_categorical()`, you get a row for every level of the variable (e
 
 ### Example:
 ```r
-# Summarize only subjects who completed the study (COMPLFL == "Y")
+# Summarize only subjects who completed the study (SAFFL == "Y")
 ard_dichotomous(
   data = adsl,
-  variables = COMPLFL,
-  value = list(COMPLFL = "Y"),
+  variables = SAFFL,
+  value = list(SAFFL = "Y"),
   by = TRT01A
 )
 ```

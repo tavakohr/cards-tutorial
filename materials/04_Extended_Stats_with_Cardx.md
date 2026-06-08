@@ -41,7 +41,7 @@ For stratified categorical analyses (e.g., comparing response rates between trea
 # Stratify by SEX (grouping factor)
 ard_cmh_test(
   data = adsl,
-  variables = COMPLFL,
+  variables = SAFFL,
   by = TRT01A,
   strata = SEX
 )
