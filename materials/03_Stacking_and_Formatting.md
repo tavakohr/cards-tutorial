@@ -30,7 +30,7 @@ ard_demog <- ard_stack(
   # Categorical summaries
   ard_categorical(variables = c(SEX, RACE)),
   # Grouping variable
-  by = TRT01A
+  .by = TRT01A
 )
 ```
 
@@ -66,7 +66,7 @@ You can control formatting using `ard_fmt_args()` or by passing formatting argum
 ard_age_fmt <- ard_continuous(
   data = adsl,
   variables = AGE,
-  by = TRT01A,
+  .by = TRT01A,
   fmt_fn = list(
     # n gets 0 decimals
     AGE = list(

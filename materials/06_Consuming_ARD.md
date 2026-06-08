@@ -40,13 +40,13 @@ ard_data <- ard_stack(
   data = adsl,
   ard_continuous(variables = AGE),
   ard_categorical(variables = c(SEX, RACE)),
-  by = TRT01A
+  .by = TRT01A
 )
 
 # 2. Render the table using the pre-computed ARD
 table_demog <- tbl_ard_summary(
   cards = ard_data,
-  by = TRT01A,
+  .by = TRT01A,
   variables = c(AGE, SEX, RACE)
 ) %>%
   add_overall() %>%
