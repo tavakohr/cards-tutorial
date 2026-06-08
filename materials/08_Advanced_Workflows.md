@@ -27,7 +27,7 @@ ard_custom <- ard_continuous(
   data = adsl,
   variables = AGE,
   by = TRT01A,
-  statistics = list(
+  statistic = list(
     AGE = list(
       n = function(x) sum(!is.na(x)),
       gmean = geom_mean,

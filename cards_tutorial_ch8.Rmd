@@ -56,13 +56,13 @@ geom_mean <- function(x) {
 }
 
 # 2. Run ard_continuous using the custom function
-# Hint: Pass your function as a named item inside statistics = list(AGE = list(gmean = ...))
+# Hint: Pass your function as a named item inside statistic = list(AGE = list(gmean = ...))
 
 ard_custom <- ard_continuous(
   data = adsl,
   variables = AGE,
   by = TRT01A,
-  statistics = list(
+  statistic = list(
     AGE = list(
       gmean = ___
     )
@@ -94,7 +94,7 @@ ard_custom <- ard_continuous(
   data = adsl,
   variables = AGE,
   by = TRT01A,
-  statistics = list(
+  statistic = list(
     AGE = list(
       gmean = geom_mean
     )
