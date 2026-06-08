@@ -77,6 +77,21 @@ ard_ttest %>%
 ### The Rendering Step: `apply_fmt_fun()`
 No matter how formatting rules are defined, the raw `{cardx}` output does not contain the formatted string column (`stat_fmt`) by default. You must pipe the ARD object through **`apply_fmt_fun()`** to generate the rounded text representations for display.
 
+### Flattening Hypothesis Test Results (`unlist_ard_columns`)
+Because statistical test outputs include descriptive text rows (such as the testing `method` or `alternative` hypothesis) that are not numerical, they do not receive numeric formatting recipes. As a result, the `stat_fmt` column will contain `NULL` for these rows.
+
+If you try to flatten the column using `unlist(stat_fmt)` inside a `mutate()`, you will receive an error:
+`! stat_fmt must be size N or 1, not M`
+because `unlist()` deletes the `NULL` items.
+
+To flatten the formatted outputs safely, pipe your results through **`unlist_ard_columns()`** or target only `stat_fmt`:
+```r
+# Perform t-test, apply formats, and flatten only the stat_fmt column
+ard_ttest_flat <- ard_stats_t_test(adsl_2groups, variables = AGE, by = TRT01A) %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt)
+```
+
 ---
 
 ## 4.4 Survival Analysis (`ard_survival_survfit`)

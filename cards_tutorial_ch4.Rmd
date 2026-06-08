@@ -76,6 +76,8 @@ Statistical test functions in `{cardx}` return multiple values (e.g., test stati
        update_ard_fmt_fun(p.value = 4) %>%  # Change p-value format to 4 decimals
        apply_fmt_fun()
      ```
+3. **Safely flattening columns:**
+   - Because hypothesis tests and models return metadata rows (like the statistical `method`) that aren't formatted, `stat_fmt` will contain `NULL` for those rows. Direct use of R's `unlist()` will drop these `NULL`s, resulting in vector length mismatches. Always use **`unlist_ard_columns()`** (or `unlist_ard_columns(columns = stat_fmt)`) to safely flatten the column while keeping the row count intact.
 
 ---
 

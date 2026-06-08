@@ -54,6 +54,8 @@ Clinical standards dictate the exact number of decimal places for each statistic
 
 In `{cards}`, you specify these rules using the `fmt_fn` argument when calculating the ARD. The formatted string is generated in the `stat_fmt` column after calling `apply_fmt_fun()`.
 
+- **`unlist_ard_columns()`**: Because `stat` and `stat_fmt` are list-columns, they can be difficult to work with in standard tables. `{cards}` provides `unlist_ard_columns()` to cleanly flatten these columns into standard vectors. By default, it replaces any `NULL` elements with `NA` (preventing standard R `unlist()` errors where `NULL`s are dropped and row counts mismatch). You can target specific columns by calling `unlist_ard_columns(columns = stat_fmt)`.
+
 ---
 
 ## Exercise 3.1 — Combine Multiple ARD Outputs

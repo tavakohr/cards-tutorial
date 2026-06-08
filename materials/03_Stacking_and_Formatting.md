@@ -83,9 +83,40 @@ By specifying `fmt_fn` at the calculation step, you ensure that the formatting r
 
 ---
 
+## 3.4 Flattening ARD List-Columns (`unlist_ard_columns`)
+
+ARD data frames store calculated statistics (in `stat`) and formatted representations (in `stat_fmt`) as **list-columns**. This is because different statistics can have different types (numeric, character, logical).
+
+However, list-columns can be difficult to use in standard reporting pipelines. If you attempt to use base R's `unlist()` directly, like:
+```r
+ard %>% mutate(stat_fmt = unlist(stat_fmt))
+```
+you will get a length mismatch error if any row contains a `NULL` value (since `unlist()` silently discards `NULL`s, shrinking the vector's size).
+
+To solve this, `{cards}` exports **`unlist_ard_columns()`**. This function safely:
+1. Replaces any `NULL` elements with `NA` (preserving the exact row count of the data frame).
+2. Converts the list-column into a flat atomic vector.
+3. Automatically unlists all list-columns except metadata columns like `warning`, `error`, and `fmt_fun` (though you can specify target columns using the `columns` argument).
+
+### Example:
+```r
+# Unlist all eligible list-columns
+ard_flat <- ard_age_fmt %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns()
+
+# Unlist ONLY the stat_fmt column, keeping others as lists
+ard_flat_fmt_only <- ard_age_fmt %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt)
+```
+
+---
+
 ## Chapter 3 Summary
 
 - **`bind_ard()`** binds separate ARD tables, validating that no duplicate analysis results are created unless `replace = TRUE` is explicitly set.
 - **`ard_stack()`** is a high-level wrapper to run continuous and categorical functions in one command.
 - **Formatting** is defined via `fmt_fn` (which can take decimal integers, custom formatting functions, or template strings) and is stored directly in the `stat_fmt` column.
+- **`unlist_ard_columns()`** is used to flatten list-columns (like `stat_fmt`) to standard vectors safely, replacing `NULL` values with `NA` to avoid vector length errors.
 - Separating calculation-stage formatting from downstream display layout keeps the workflow robust and auditable.
