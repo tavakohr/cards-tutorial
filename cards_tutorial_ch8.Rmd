@@ -36,7 +36,7 @@ data("adsl",  package = "pharmaverseadam")
 
 ## Chapter 8: Advanced Workflows
 
-### 7.1 Custom Statistics & Standards Alignment
+### 8.1 Custom Statistics & Standards Alignment
 
 In clinical programming, we often need to calculate non-standard statistics (like geometric means in PK/PD studies) or audit calculations for regulatory compliance. 
 
@@ -45,7 +45,7 @@ In clinical programming, we often need to calculate non-standard statistics (lik
 
 ---
 
-## Exercise 7.1 — Run a Custom Geometric Mean Statistic
+## Exercise 8.1 — Run a Custom Geometric Mean Statistic
 
 Let's write a simple geometric mean function: `geom_mean = function(x) exp(mean(log(x[x > 0]), na.rm = TRUE))`. We will pass it to `ard_continuous()` to summarize `AGE` grouped by `TRT01A`.
 
@@ -82,7 +82,7 @@ ard_custom %>%
 ```
 
 ```{r ch8-ex1-hint-1}
-# Set gmean = geom_mean inside statistics
+# Set gmean = geom_mean inside statistic
 ```
 
 ```{r ch8-ex1-solution}
@@ -114,13 +114,13 @@ ard_custom %>%
 ```{r ch8-ex1-check}
 grade_result(
   pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "gmean" %in% .result$stat_name, "Correct! You successfully calculated and formatted a custom statistic. This demonstrates how extensible the `{cards}` package is for non-standard clinical summaries."),
-  fail_if(~ TRUE, "Check that you map gmean = geom_mean inside the nested statistics list and format the output.")
+  fail_if(~ TRUE, "Check that you map gmean = geom_mean inside the nested statistic list and format the output.")
 )
 ```
 
 ---
 
-## Exercise 7.2 — Map a Flat ARD Row to CDISC ARS JSON
+## Exercise 8.2 — Map a Flat ARD Row to CDISC ARS JSON
 
 Each row in a `{cards}` ARD corresponds to a CDISC ARS `OperationResult` object inside `Analysis.results`. 
 
@@ -195,12 +195,12 @@ grade_result(
 
 ```{r ch8-quiz, echo=FALSE}
 quiz(
-  caption = "Chapter 7 — Check Your Understanding",
+  caption = "Chapter 8 — Check Your Understanding",
 
   question(
     "How do you pass a custom statistic function to `ard_continuous()`?",
     answer("Write a new R package"),
-    answer("Pass a named list of functions to the `statistics` argument", correct = TRUE),
+    answer("Pass a named list of functions to the `statistic` argument", correct = TRUE),
     answer("Pass it to the `fmt_fn` argument"),
     answer("You cannot calculate custom statistics in `{cards}`"),
     allow_retry = TRUE

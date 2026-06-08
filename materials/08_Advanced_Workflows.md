@@ -4,7 +4,7 @@
 
 While `{cards}` provides a comprehensive set of default summary statistics, clinical study protocols often require custom calculations (e.g. geometric mean, geometric coefficient of variation, specific percentiles, or custom confidence intervals).
 
-You can define custom statistics by passing a named list of functions to the `statistics` argument of `ard_continuous()`.
+You can define custom statistics by passing a named list of functions to the `statistic` argument of `ard_continuous()`.
 
 ### Rules for Custom Statistic Functions:
 1. The function must take a numeric vector as its first argument.
@@ -101,6 +101,6 @@ This level of automated quality control is impossible when results are trapped i
 
 ## Chapter 8 Summary
 
-- **Custom statistics** are implemented by passing a named list of functions to the `statistics` argument in `ard_continuous()`.
+- **Custom statistics** are implemented by passing a named list of functions to the `statistic` argument in `ard_continuous()`.
 - `{cards}` ARD columns map directly to the CDISC ARS **`OperationResult`** JSON structure, where `group1_level` corresponds to `groupId`, `stat_name` maps to `operationId`, and raw/formatted values map to `rawValue`/`formattedValue`.
 - **Traceability auditing** leverages this structured layout to automatically verify that the generated results exactly match the planned analysis specifications.
