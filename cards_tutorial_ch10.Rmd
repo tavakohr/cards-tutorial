@@ -1,0 +1,264 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 10: Broom vs. Parameters Tidiers"
+author: "Hamid Tavakoli, MD, MSc"
+tutorial:
+  version: 1.1
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  Understand how R translates complex model objects into clean datasets using model tidiers, and how cardx standardizes these outputs.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(dplyr)
+library(cards)
+library(cardx)
+library(broom)
+library(broom.helpers)
+library(parameters)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+
+# Pre-fit a logistic regression model for the exercises
+# Predicting Safety Population inclusion (SAFFL == "Y") based on Treatment Arm and Age
+adsl_model_data <- adsl %>%
+  filter(!is.na(TRT01A), !is.na(AGE)) %>%
+  mutate(RESP_BIN = ifelse(SAFFL == "Y", 1, 0))
+
+model_fit <- glm(RESP_BIN ~ TRT01A + AGE, data = adsl_model_data, family = binomial)
+```
+
+---
+
+## 10.1 Introduction to Tidiers vs. SAS ODS
+
+In SAS, when you run a statistical procedure like `PROC LOGISTIC`, the math happens in the background, and the results are automatically printed to the screen. To save those results into a dataset, you use the Output Delivery System (ODS):
+
+```sas
+ods output ParameterEstimates = my_estimates;
+proc logistic data=adsl;
+  class TRT01A / param=ref;
+  model RESP_BIN(event='1') = TRT01A AGE;
+run;
+```
+
+In R, things work differently. A modeling function like `glm()` returns a **complex model object**. This object is essentially a massive, nested list containing the coefficients, residuals, gradients, and model frame. It is *not* a flat data frame.
+
+To get the equivalent of `ParameterEstimates`, R uses **"tidier" functions**. A tidier takes the messy, nested model object and extracts the statistics into a clean, flat data frame (a tibble). 
+
+The two most prominent packages for this in R are `{broom}` and `{parameters}`.
+
+---
+
+## 10.2 The Column Mapping Problem
+
+Just as different SAS PROCs might use slightly different column names in their ODS outputs (e.g., `Estimate` vs `Coefficient`, or `ProbChiSq` vs `Probt`), `{broom}` and `{parameters}` use different naming conventions.
+
+When standardizing output for the ARD structure, `{broom.helpers}` and `{cardx}` strictly adopt the `{broom}` convention. Here is the translation dictionary:
+
+| Concept | `{broom}::tidy()` Column | `{parameters}::model_parameters()` Column | Standardized ARD Output |
+|:---|:---|:---|:---|
+| Coefficient Name | `term` | `Parameter` | `term` |
+| Point Estimate | `estimate` | `Coefficient` | `estimate` |
+| Standard Error | `std.error` | `SE` | `std.error` |
+| Test Statistic | `statistic` | `z` | `statistic` |
+| p-value | `p.value` | `p` | `p.value` |
+| Conf. Int. (Low)| `conf.low` | `CI_low` | `conf.low` |
+| Conf. Int. (High)| `conf.high` | `CI_high` | `conf.high` |
+
+---
+
+## 10.3 Key Differences: broom vs parameters
+
+While both packages do the exact same job (extracting coefficients), they have wildly different philosophies on how to present the data, particularly regarding categorical variables.
+
+### The Problem with `{broom}`
+`{broom}` is minimalist. If a coefficient isn't mathematically calculated by the model engine, `{broom}` will not output a row for it.
+For a categorical variable with three levels (Placebo, Low Dose, High Dose), the model only estimates coefficients for Low Dose and High Dose. The Placebo group is the **reference level** (its effect is absorbed into the Intercept, so mathematically its coefficient is 0, or Odds Ratio = 1).
+**Therefore, `{broom}` completely drops the Placebo row.**
+
+For clinical programmers, this is a nightmare. Clinical TLFs (Tables, Listings, Figures) absolutely require the reference row to be displayed (e.g., displaying `1.00 (Reference)` in the Odds Ratio column).
+
+### The Power of `{parameters}`
+The `{parameters}` package is built for reporting. It is capable of intelligently injecting those missing reference rows back into the data frame, populating them with `0` (or `1` if exponentiated) and `NA` for p-values.
+
+---
+
+## Exercise 10.3 — Visualizing the Missing Reference Row
+
+We have pre-fit a logistic regression model (`model_fit`) predicting response by `TRT01A` and `AGE`. `TRT01A` has three levels: Placebo, Xanomeline Low Dose, and Xanomeline High Dose. Placebo is the reference.
+
+Let's use the standard `broom::tidy()` function to extract the coefficients and observe the missing reference row.
+
+```{r ch10-ex3, exercise=TRUE, exercise.lines=10}
+# Extract coefficients using broom::tidy
+tidy_broom <- broom::tidy(model_fit)
+
+# View the term and estimate columns
+tidy_broom %>%
+  select(term, estimate, p.value)
+```
+
+```{r ch10-ex3-solution}
+tidy_broom <- broom::tidy(model_fit)
+
+tidy_broom %>%
+  select(term, estimate, p.value)
+```
+
+```{r ch10-ex3-check}
+grade_result(
+  pass_if(~ TRUE, "Notice that 'Placebo' is nowhere to be found! Only the Low Dose and High Dose terms appear."),
+  fail_if(~ FALSE, "")
+)
+```
+
+---
+
+## 10.4 broom.helpers: The Rosetta Stone
+
+We want the strict, predictable column names of `{broom}`, but we desperately need the reference rows and variable metadata provided by `{parameters}`. 
+
+Enter the **`{broom.helpers}`** package. 
+
+When you use `{cardx}` to build a regression ARD, it doesn't call `broom` directly. It calls `broom.helpers::tidy_plus_plus()`. This incredible wrapper function does several things simultaneously:
+1. It extracts the model math.
+2. It standardizes all column names to the `{broom}` convention.
+3. **It magically rebuilds and injects the reference rows.**
+4. It attaches the original variable labels from the dataset.
+
+Think of `{broom.helpers}` as a powerful SAS macro that cleans up your `ODS OUTPUT`, merges it with `PROC CONTENTS` to get labels, and inserts dummy rows for reference classes automatically.
+
+---
+
+## Exercise 10.4 — Bringing Back the Reference Row
+
+Let's run the exact same model through `broom.helpers::tidy_plus_plus()`.
+
+```{r ch10-ex4, exercise=TRUE, exercise.lines=10}
+# Extract coefficients using broom.helpers
+tidy_helpers <- broom.helpers::tidy_plus_plus(model_fit)
+
+# Select the variable, label, and reference_row indicator
+tidy_helpers %>%
+  select(variable, label, reference_row, estimate)
+```
+
+```{r ch10-ex4-solution}
+tidy_helpers <- broom.helpers::tidy_plus_plus(model_fit)
+
+tidy_helpers %>%
+  select(variable, label, reference_row, estimate)
+```
+
+```{r ch10-ex4-check}
+grade_result(
+  pass_if(~ TRUE, "Brilliant! You can now see the Placebo row has been safely restored, labeled as the reference row, and given an estimate of 0 (which becomes OR=1 when exponentiated)."),
+  fail_if(~ FALSE, "")
+)
+```
+
+---
+
+## 10.5 Customizing the Tidier in cardx
+
+Because `{cardx::ard_regression()}` uses `tidy_plus_plus()` by default, your ARDs will automatically contain the reference levels needed for clinical tables!
+
+If you ever find yourself working with an exotic model class that `{broom.helpers}` struggles with, you can bypass this automation and force `{cardx}` to use a specific tidying function via the `tidy_fun` argument.
+
+```r
+# Example of overriding the default tidier
+ard_reg <- ard_regression(
+  model_fit,
+  tidy_fun = broom::tidy # Forces the use of strict broom
+)
+```
+
+In 99% of clinical trial scenarios, however, the default `{broom.helpers}` integration works perfectly right out of the box.
+
+---
+
+## Exercise 10.5 — Creating the Regression ARD
+
+Finally, let's wrap our model in `ard_regression()` to see how `{cardx}` takes the `broom.helpers` output and transforms it into the standard, long-format ARD structure you learned in Chapter 9.
+
+```{r ch10-ex5, exercise=TRUE, exercise.lines=12}
+# Create the ARD for the regression model
+# Let's also ask it to exponentiate the coefficients into Odds Ratios
+reg_ard <- ard_regression(model_fit, exponentiate = TRUE)
+
+# Format and view the ARD
+reg_ard %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt) %>%
+  filter(variable == "TRT01A") # Focus only on the Treatment variable
+```
+
+```{r ch10-ex5-solution}
+reg_ard <- ard_regression(model_fit, exponentiate = TRUE)
+
+reg_ard %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt) %>%
+  filter(variable == "TRT01A")
+```
+
+```{r ch10-ex5-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result), "Excellent! You can see the Placebo reference row is fully intact within the ARD structure, showing an Odds Ratio estimate of 1."),
+  fail_if(~ TRUE, "Make sure to run the ard_regression code.")
+)
+```
+
+---
+
+## Chapter 10 Knowledge Check
+
+```{r ch10-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 10 — Check Your Understanding",
+
+  question(
+    "What is the equivalent of SAS's `ODS OUTPUT ParameterEstimates = ds;` in the R modeling ecosystem?",
+    answer("`glm()`"),
+    answer("`summary()`"),
+    answer("Model Tidiers like `broom::tidy()`", correct = TRUE),
+    answer("`PROC PRINT`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why is the `{broom}` package alone insufficient for clinical reporting of categorical variables?",
+    answer("It crashes when trying to extract odds ratios."),
+    answer("It strictly removes reference class levels (e.g. Placebo) from the output because their mathematical coefficient is 0.", correct = TRUE),
+    answer("It uses `Parameter` instead of `term` for column names."),
+    answer("It cannot calculate p-values."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What crucial role does `{broom.helpers::tidy_plus_plus()}` play when `{cardx}` builds a regression ARD?",
+    answer("It calculates the original model math."),
+    answer("It generates standard TLF RTF files."),
+    answer("It standardizes column names, adds variable labels, and intelligently reconstructs the missing reference rows.", correct = TRUE),
+    answer("It converts datasets to SAS transport files."),
+    allow_retry = TRUE
+  )
+)
+```

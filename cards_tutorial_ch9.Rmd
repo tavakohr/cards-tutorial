@@ -1,0 +1,322 @@
+---
+title: "cards & cardx R Packages — Interactive Training"
+subtitle: "Chapter 9: ARD Structure Reference"
+author: "Hamid Tavakoli, MD, MSc"
+tutorial:
+  version: 1.1
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    css: www/custom.css
+runtime: shiny_prerendered
+description: >
+  A deep dive into the Analysis Results Data (ARD) structure. Learn the standard column layout, list-columns, and how it maps to SAS ODS outputs.
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(gradethis)
+library(pharmaverseadam)
+library(dplyr)
+library(cards)
+library(cardx)
+library(purrr)
+library(tibble)
+
+tutorial_options(
+  exercise.timelimit = 60
+)
+gradethis_setup()
+
+# Load datasets
+data("adsl",  package = "pharmaverseadam")
+
+# Pre-calculate ARD for exercises
+ard_demo <- ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by = TRT01A,
+  .total_n = TRUE
+)
+```
+
+---
+
+## 9.1 Anatomy of an ARD vs. SAS ODS
+
+For SAS programmers, dealing with statistical outputs usually means managing `ODS OUTPUT` datasets. `PROC MEANS`, `PROC FREQ`, `PROC TTEST`, and `PROC LIFETEST` each produce a dataset with uniquely named columns and vastly different shapes. A typical macro for a TLF (Table, Listing, Figure) spends 80% of its code just cleaning and renaming these outputs so they can be merged.
+
+The **Analysis Results Data (ARD)** framework created by the `{cards}` package solves this by forcing *all* statistical outputs into a single, standardized dictionary. It is the "universal adapter" of clinical reporting.
+
+Here is the dictionary of an ARD data frame. Every `{cards}` and `{cardx}` function emits exactly these columns:
+
+| Column Name | Class | Description | SAS `ODS OUTPUT` Analogy |
+|:---|:---|:---|:---|
+| `group1` | `character` | The variable name used for primary grouping. | The variable name in a `BY` or `CLASS` statement. |
+| `group1_level` | `any` | The specific level of the grouping variable. | The value of the `CLASS` variable for a specific row. |
+| `group2` | `character` | Secondary grouping variable (if any). | Second `CLASS` variable. |
+| `group2_level` | `any` | Secondary grouping level. | Value of the second `CLASS` variable. |
+| `variable` | `character` | The variable being summarized/analyzed. | The variable in `VAR` (PROC MEANS) or `TABLES` (PROC FREQ). |
+| `variable_grp` | `character` | Sub-group variable name (often same as `variable` for categoricals). | Interaction terms or categorical variable names. |
+| `variable_grp_level`| `any` | The specific category/level being analyzed (e.g., "M", "WHITE"). | The specific formatted value of the `TABLES` variable. |
+| `stat_name` | `character` | Short machine-readable key (e.g., "mean", "n", "p.value"). | Column names like `Mean`, `N`, `Prob` transposed into rows. |
+| `stat_label` | `character` | Human-readable label for headers (e.g., "Mean", "n", "p-value"). | The `LABEL` attribute of the statistic. |
+| `stat` | `list` | A list-column containing the raw calculated value. | The actual numeric/character value of the statistic. |
+| `stat_fmt` | `character` | Display-ready string (e.g., "75.2"). | A `PUT(var, format.)` character conversion. |
+| `context` | `character` | Function that generated the row (e.g. `ard_continuous`). | The name of the PROC that generated the data. |
+
+*(Note: `{cards}` supports up to `group5` / `group5_level` for deep stratification).*
+
+---
+
+## 9.2 Grouping vs. Variable Columns
+
+A common point of confusion is the difference between `group1` and `variable_grp`.
+
+- **Grouping Columns (`group1`, `group2`...):** These define the independent **sub-populations**. If you summarize Age by Treatment Arm, `group1` is `"TRT01A"`. The calculations for "Placebo" are done completely independently of the calculations for "Xanomeline High Dose".
+  - *SAS Equivalent:* `BY` processing or `CLASS` variables.
+
+- **Variable Columns (`variable`, `variable_grp`, `variable_grp_level`):** These define what is being calculated *within* that sub-population. If you summarize `SEX`, `variable` is `"SEX"`, and `variable_grp_level` holds `"M"` and `"F"`.
+  - *SAS Equivalent:* The variable passed to the `VAR` statement or the levels of the `TABLES` request.
+
+Let's look at an example. We have an ARD named `ard_demo` loaded in your environment, which summarizes `AGE` and `SEX` by `TRT01A`.
+
+---
+
+## Exercise 9.2 — Filtering the ARD
+
+Let's filter the `ard_demo` data frame down to only the `Placebo` group, looking specifically at the `AGE` variable. 
+
+```{r ch9-ex2, exercise=TRUE, exercise.lines=12}
+# ard_demo is pre-loaded.
+# Filter it to where the grouping level is Placebo and the variable is AGE.
+
+placebo_age_ard <- ard_demo %>%
+  filter(
+    group1_level == ___,
+    variable == ___
+  )
+
+# View the structure of the filtered data
+placebo_age_ard %>% 
+  select(group1_level, variable, stat_name, stat_label)
+```
+
+```{r ch9-ex2-hint-1}
+# Use "Placebo" for the group1_level and "AGE" for the variable.
+```
+
+```{r ch9-ex2-solution}
+placebo_age_ard <- ard_demo %>%
+  filter(
+    group1_level == "Placebo",
+    variable == "AGE"
+  )
+
+placebo_age_ard %>% 
+  select(group1_level, variable, stat_name, stat_label)
+```
+
+```{r ch9-ex2-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && nrow(.result) > 0 && unique(.result$group1_level) == "Placebo", "Excellent! You have successfully filtered an ARD by its structural columns. Notice how each statistic is an individual row."),
+  fail_if(~ TRUE, "Make sure to set group1_level to 'Placebo' and variable to 'AGE'.")
+)
+```
+
+---
+
+## 9.3 Demystifying the `stat` List-Column
+
+This is the biggest hurdle for SAS programmers transitioning to R. 
+
+In SAS, a dataset must be rectangular. If you have a column named `STATISTIC`, it must be either 100% Numeric or 100% Character. You cannot mix types. Furthermore, you cannot store a vector of numbers (like a confidence interval: `[71.2, 79.4]`) in a single SAS cell.
+
+Because an ARD uses a "long" format, the `stat` column needs to hold:
+- Integers (e.g., `n`)
+- Decimals (e.g., `mean`)
+- Character strings (e.g., `method`)
+- Numeric vectors of length 2 (e.g., `conf.low`, `conf.high`)
+
+R solves this using a **list-column**. The `stat` column does not hold primitive values; it holds *lists*. Think of each cell in the `stat` column as a tiny box that can contain any valid R object.
+
+Because it is a list, you cannot simply do `ard_demo$stat + 1`. You must first extract the item from the list.
+
+---
+
+## Exercise 9.3 — Extracting from a List-Column
+
+Let's extract the raw numeric `mean` for the Placebo group's Age.
+
+```{r ch9-ex3, exercise=TRUE, exercise.lines=15}
+# 1. Filter to Placebo and AGE, and specifically the "mean" stat_name
+mean_row <- ard_demo %>%
+  filter(
+    group1_level == "Placebo",
+    variable == "AGE",
+    stat_name == "mean"
+  )
+
+# 2. Extract the stat list-column, then pluck out the first element
+mean_value <- mean_row %>%
+  pull(stat) %>%       # This returns a list of length 1
+  purrr::pluck(1)      # This unlists the first element to a raw numeric
+
+# Print the value and its class
+print(mean_value)
+class(mean_value)
+```
+
+```{r ch9-ex3-solution}
+mean_row <- ard_demo %>%
+  filter(
+    group1_level == "Placebo",
+    variable == "AGE",
+    stat_name == "mean"
+  )
+
+mean_value <- mean_row %>%
+  pull(stat) %>%
+  purrr::pluck(1)
+
+print(mean_value)
+class(mean_value)
+```
+
+```{r ch9-ex3-check}
+grade_result(
+  pass_if(~ is.numeric(.result) || TRUE, "Great! You can see that by using pull() and pluck(), we extracted the raw numeric value out of the list-column box."),
+  fail_if(~ TRUE, "Just click Run to see how list extraction works.")
+)
+```
+
+*(Note: `{cards}` provides a helper function `unlist_ard_columns()` which does this safely for the entire data frame when possible.)*
+
+---
+
+## 9.4 The Formatting Columns (`stat_fmt`)
+
+In SAS, you might apply a format like `PUT(MEAN, 5.1)` to turn `75.2491` into `"75.2"`. 
+
+In the ARD standard, this formatting is captured permanently in the `stat_fmt` column. When `apply_fmt_fun()` is run on an ARD, it evaluates formatting rules and populates `stat_fmt` with display-ready strings.
+
+**Why is this brilliant?**
+The ARD now contains *both* the raw numeric value (for verification and downstream math) *and* the formatted string (for table rendering). You never have to choose between a numeric dataset and a character dataset.
+
+---
+
+## Exercise 9.4 — Viewing Formatted Results
+
+Let's look at how the formatted results look alongside their labels.
+
+```{r ch9-ex4, exercise=TRUE, exercise.lines=12}
+# Apply formatting to the ARD
+formatted_ard <- ard_demo %>%
+  apply_fmt_fun()
+
+# Unlist the stat_fmt column so it becomes a standard character column
+# and select the relevant columns for display
+formatted_ard %>%
+  filter(variable == "AGE", group1_level == "Placebo") %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(stat_name, stat_label, stat_fmt)
+```
+
+```{r ch9-ex4-solution}
+formatted_ard <- ard_demo %>%
+  apply_fmt_fun()
+
+formatted_ard %>%
+  filter(variable == "AGE", group1_level == "Placebo") %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(stat_name, stat_label, stat_fmt)
+```
+
+```{r ch9-ex4-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result), "Spot on! The unlist_ard_columns function took the formatted strings out of their list-boxes, giving you a clean table ready for reporting."),
+  fail_if(~ TRUE, "Run the code to observe the formatted output.")
+)
+```
+
+---
+
+## 9.5 Visualizing the ARD
+
+While the long format is perfect for programming, it can be hard to visualize the whole dataset at once. Let's look at a raw printout of the ARD structure to see the interplay between `group*` and `variable*` columns.
+
+---
+
+## Exercise 9.5 — Print the ARD
+
+```{r ch9-ex5, exercise=TRUE, exercise.lines=12}
+# Print a subset of the ARD, dropping the raw 'stat' column for readability
+ard_demo %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(group1_level, variable, variable_grp_level, stat_name, stat_fmt) %>%
+  head(10)
+```
+
+```{r ch9-ex5-solution}
+ard_demo %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(group1_level, variable, variable_grp_level, stat_name, stat_fmt) %>%
+  head(10)
+```
+
+```{r ch9-ex5-check}
+grade_result(
+  pass_if(~ TRUE, "Excellent. Notice how continuous variables have an NA for variable_grp_level, but categorical variables would populate it with the specific category (like 'M' or 'F')."),
+  fail_if(~ FALSE, "")
+)
+```
+
+---
+
+## Chapter 9 Knowledge Check
+
+```{r ch9-quiz, echo=FALSE}
+quiz(
+  caption = "Chapter 9 — Check Your Understanding",
+
+  question(
+    "What is the SAS `ODS OUTPUT` equivalent of the `group1` column in an ARD?",
+    answer("The variable specified in the `VAR` statement."),
+    answer("The variable specified in a `BY` or `CLASS` statement.", correct = TRUE),
+    answer("The formatting applied via the `FORMAT` statement."),
+    answer("The `LABEL` attribute."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why does the ARD use a 'list-column' for the `stat` variable?",
+    answer("Because R does not support standard numeric columns."),
+    answer("To compress the size of the dataset."),
+    answer("Because R data frames require uniform column types, and `stat` needs to hold integers, decimals, character strings, and vectors depending on the `stat_name`.", correct = TRUE),
+    answer("It is a requirement of the `dplyr` package."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What function is used to safely convert a list-column like `stat_fmt` into a standard character vector for table layout?",
+    answer("`as.character()`"),
+    answer("`purrr::map_chr()`"),
+    answer("`unlist_ard_columns()`", correct = TRUE),
+    answer("`apply_fmt_fun()`"),
+    allow_retry = TRUE
+  ),
+  
+  question(
+    "In the ARD standard, which column holds the human-readable string ready for display (e.g., '75.2%')?",
+    answer("`stat`"),
+    answer("`stat_name`"),
+    answer("`stat_label`"),
+    answer("`stat_fmt`", correct = TRUE),
+    allow_retry = TRUE
+  )
+)
+```
