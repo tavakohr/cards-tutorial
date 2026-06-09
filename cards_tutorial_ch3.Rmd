@@ -36,32 +36,135 @@ data("adsl",  package = "pharmaverseadam")
 
 ## Chapter 3: Stacking and Formatting
 
-### 3.1 Combining ARD Data Frames
+### 3.1 Why Stacking — One Table, Many ARDs
 
-Most clinical trial tables present more than one variable. In `{cards}`, you generate individual ARD data frames for each variable (or set of variables of the same type) and then bind them vertically to create a single, unified dataset.
+A real demographics table is not the output of one function. It is the output of many small `{cards}` calls — one for the header N, one for AGE, one for SEX, one for RACE, possibly one for safety flags, possibly one for missingness — all stitched together into a single, layout-ready dataset.
 
-- **`bind_ard()`**: Combines multiple ARD datasets. It validates the ARD structure and checks for duplicate rows (e.g., repeating the same analysis statistic for the same group and variable).
-- **`ard_stack()`**: A wrapper that lets you perform continuous and categorical calculations in a single function call.
-  - `data`: The data frame.
-  - `...`: The ARD functions to stack (e.g., `ard_continuous()`, `ard_categorical()`).
-  - `.by`: The grouping variable to pass down to the underlying ARDs. Note the leading dot (to distinguish from the `by` argument used internally).
-  - `.attributes`: Logical. When `TRUE`, includes variable labels from the dataset.
-  - `.missing`: Logical. When `TRUE`, calculates missing counts for downstream use.
-  - `.total_n`: Logical. When `TRUE`, calculates the total N for downstream headers.
-  - `.overall`: Logical. When `TRUE`, calculates unstratified overall statistics.
+```
+   ard_total_n()         -> N=86, N=84, N=84       (header row)
+   ard_continuous(AGE)   -> n, mean, sd, median... (Age block)
+   ard_continuous(BMI)   -> n, mean, sd, median... (BMI block)
+   ard_categorical(SEX)  -> n, p per level         (Sex block)
+   ard_categorical(RACE) -> n, p per level         (Race block)
+   ard_dichotomous(SAFFL)-> n, p for "Y"           (Safety pop row)
+                |
+                |  bind_ard()  <-- this chapter
+                v
+   +-----------------------------------------+
+   |  ONE STACKED ARD                        |
+   |  - same column schema across all rows   |
+   |  - duplicates checked                   |
+   |  - ready for a layout tool to consume   |
+   +-----------------------------------------+
+```
+
+> **SAS analog:** writing several PROCs that each produce an `ODS OUTPUT` dataset and then `SET`-ing those datasets together in a DATA step. Stacking is the `{cards}` formalization of that pattern, with the added guarantee that the column schema is identical for every contributor.
+
+The chapter splits into two halves: **stacking** (sections 3.2–3.5) and **formatting** (sections 3.6–3.10).
 
 ---
 
-### 3.2 Formatting Clinical Statistics
+### 3.2 `bind_ard()` — More Than Just `bind_rows()`
 
-Clinical standards dictate the exact number of decimal places for each statistic:
-- Sample sizes (`n`) are typically formatted as integers (0 decimal places).
-- Means and Medians are formatted to 1 decimal place.
-- Standard deviations (`sd`) are formatted to 2 decimal places.
+Why not just call `dplyr::bind_rows()`? Because an ARD has invariants that a generic row-binder will not protect:
 
-In `{cards}`, you specify these rules using the `fmt_fun` argument when calculating the ARD. The formatted string is generated in the `stat_fmt` column after calling `apply_fmt_fun()`.
+- The same `(group1_level, variable, variable_grp_level, stat_name)` quadruple should never appear twice — if it does, downstream tools cannot decide which value to display, and the silent duplication leads to visually-identical-but-numerically-divergent QC findings.
+- All input data frames must carry the same standard columns; mismatched schemas should not be silently coerced.
+- The `stat` list-column must survive the bind without being flattened or coerced.
 
-- **`unlist_ard_columns()`**: Because `stat` and `stat_fmt` are list-columns, they can be difficult to work with in standard tables. `{cards}` provides `unlist_ard_columns()` to cleanly flatten these columns into standard vectors. By default, it replaces any `NULL` elements with `NA` (preventing standard R `unlist()` errors where `NULL`s are dropped and row counts mismatch). You can target specific columns by calling `unlist_ard_columns(columns = stat_fmt)`.
+`bind_ard()` enforces all three. It is a deliberately strict, validating combiner — not a permissive concatenation.
+
+```r
+ard_demog <- bind_ard(
+  ard_total_n_trt,
+  ard_age,
+  ard_sex,
+  ard_race,
+  ard_saffl
+)
+```
+
+The result is one tall ARD with all the rows needed to render a full demographics section. Same `group1_level` values everywhere (because every input was grouped by `TRT01A`), same column names, same data types in each column.
+
+> **SAS analog:** `bind_ard()` is the equivalent of a DATA-step `SET` that also runs `PROC COMPARE` invariants on its inputs before producing the union. You never get a free `SET` of incompatible structures — and that strictness is the point.
+
+---
+
+### 3.3 What Counts as a Duplicate
+
+A duplicate is *not* "the same number appears twice." A duplicate is "the same row identity appears twice." The row identity is the combination of:
+
+```
+   group1 + group1_level
+ + group2 + group2_level   (if present)
+ + variable
+ + variable_grp + variable_grp_level
+ + stat_name
+```
+
+If those columns match across two rows, those two rows are claiming to be the same statistic, computed two different ways. `bind_ard()` will flag it.
+
+Common ways the situation arises in practice:
+
+| Cause                                                              | Fix                                                                   |
+|--------------------------------------------------------------------|-----------------------------------------------------------------------|
+| You called `ard_continuous(AGE)` twice with different formatting   | Drop one call; configure formatting once in the surviving call.       |
+| You bound an overall ARD into a per-arm ARD where both used `TRT01A` | Stratify only the per-arm one; produce the overall via a separate call without `by`. |
+| You mixed `ard_categorical(SEX)` and `ard_dichotomous(SEX)`        | Pick one — they overlap on the same `(variable, level)` keys.         |
+
+> **SAS analog:** the same defensive instinct as running `PROC SORT NODUPKEY` after a `SET` to make sure no `(BY, _STAT_)` row appears twice.
+
+---
+
+### 3.4 `ard_stack()` — One Call for Many ARDs
+
+When you find yourself writing the same boilerplate four times — same `data`, same `by` — `ard_stack()` collapses it into one call:
+
+```r
+ard_demog <- ard_stack(
+  data       = adsl,
+  ard_continuous(variables = c(AGE, BMIBL)),
+  ard_categorical(variables = c(SEX, RACE)),
+  .by        = TRT01A,
+  .total_n   = TRUE,
+  .missing   = TRUE,
+  .attributes = TRUE
+)
+```
+
+Notice the leading dots on the wrapper-level arguments (`.by`, `.total_n`, `.missing`, `.attributes`, `.overall`). They distinguish wrapper-controlled options from the `by`/`variables` that would otherwise be re-passed into each inner function. The result is one stacked ARD, validated by the same `bind_ard()` machinery under the hood.
+
+#### 3.4.1 What each wrapper flag does
+
+| Argument       | When `TRUE`...                                                                |
+|----------------|-------------------------------------------------------------------------------|
+| `.by`          | Stratification variable passed down to every inner call.                       |
+| `.total_n`     | Automatically adds an `ard_total_n()` block — no separate call needed.         |
+| `.missing`     | Automatically adds an `ard_missing()` block per variable.                      |
+| `.overall`     | Adds a no-stratification block — the "Total" column data, alongside per-arm.   |
+| `.attributes`  | Picks up variable labels stored in the input frame (e.g., `label(AGE)="Age, years"`) and uses them for `variable_label`. |
+
+Use `ard_stack()` for demographics-style tables where the per-call boilerplate would dominate. Use `bind_ard()` directly when the inputs are heterogeneous (different `by` variables, different filters, different populations).
+
+> **SAS analog:** `ard_stack()` is the macro that wraps your `%MACRO build_demog_arm`. It is convenience around a well-defined pattern; the underlying tools still work on their own.
+
+---
+
+### 3.5 Choosing Between `bind_ard()` and `ard_stack()`
+
+```
+                Is every inner call working on the
+                same data, same by, same population?
+                          /          \
+                        YES           NO
+                         |             |
+                         v             v
+                   ard_stack()      bind_ard()
+                  (less typing,    (full control,
+                   one call)        heterogeneous inputs)
+```
+
+A typical study program uses both — `ard_stack()` for the demographics section, then `bind_ard()` to join the demographics ARD with a separately-built efficacy ARD that has a different `by` (e.g., arm × visit instead of just arm).
 
 ---
 
@@ -98,6 +201,143 @@ grade_result(
   fail_if(~ TRUE, "Ensure you are calling bind_ard(ard_age, ard_sex).")
 )
 ```
+
+> **Inspect:** the `variable` column now contains both `"AGE"` and `"SEX"`. The `context` column tells you which `{cards}` function produced each block. The schema is identical across both — that uniformity is the reason `bind_ard()` could combine them safely.
+
+---
+
+### 3.6 Why Formatting Is a Separate Step
+
+In SAS you typically attach a `FORMAT` to a variable and forget about it; the format follows the variable into every output. In ARD the rule is the opposite: formatting is an *explicit*, recorded transformation from `stat` to `stat_fmt`. Both versions persist side-by-side, and the formatting rules live on the dataset row, not on a global variable attribute.
+
+```
+                stat               fmt_fun             stat_fmt
+              (numeric)          (decimals/fn)        (character)
+              75.21    -------->   1 decimal  ------->  "75.2"
+              8.12     -------->   2 decimals ------->  "8.12"
+              0.616    -------->  pct, 1 dec  ------->  "61.6%"
+              0.00234  -------->  scientific  ------->  "2.3e-3"
+                |                                          |
+                |                                          |
+                +---- both stay in the ARD ----------------+
+```
+
+Two payoffs:
+
+1. **Auditability.** A reviewer can re-derive every `stat_fmt` from `stat` because the rule is on the row, not implicit in a SAS proc somewhere.
+2. **Re-rendering.** Switching the entire table from one decimal place to two for the means is a single argument change — not a hunt through layout code.
+
+> **SAS analog:** the difference between `PUT(AGE, 5.1)` evaluated once at display time vs. storing both the raw `AGE` and the formatted string `"75.2"` as two persistent columns in the dataset. ARD prefers the latter.
+
+---
+
+### 3.7 The `fmt_fun` Specification
+
+`fmt_fun` is a nested list. The outer level is keyed by `variable`, and the inner level is keyed by `stat_name`. Three forms are accepted at the inner level.
+
+| Form                                | Meaning                                                                  |
+|-------------------------------------|--------------------------------------------------------------------------|
+| `mean = 1`                          | "Round mean to 1 decimal place." Shorthand.                              |
+| `mean = ~ format(round(.x, 1), nsmall = 1)` | Plug in any custom R function; receives the raw value as `.x`.   |
+| `p = label_percent(accuracy = 0.1)` | Pre-built scales-style formatter that returns a character string.        |
+
+A complete spec for a typical AGE block:
+
+```r
+fmt_fun = list(
+  AGE = list(
+    n        = 0,    # integer
+    mean     = 1,    # one decimal
+    sd       = 2,    # two decimals
+    median   = 1,    # one decimal
+    p25      = 0,    # quartiles as integers
+    p75      = 0,
+    min      = 0,
+    max      = 0
+  )
+)
+```
+
+Multiple variables get multiple top-level keys:
+
+```r
+fmt_fun = list(
+  AGE    = list(n = 0, mean = 1, sd = 2),
+  BMIBL  = list(n = 0, mean = 2, sd = 2)
+)
+```
+
+> **SAS analog:** the inner list is the moral equivalent of attaching a `FORMAT` to a SAS variable, but the format is keyed by *both* the variable and the *statistic* so that within the AGE block the mean rounds to 1 dp and the SD rounds to 2 dp — something a global SAS `FORMAT AGE 5.1;` cannot express.
+
+---
+
+### 3.8 Clinical Decimal Conventions — A Survival Cheat Sheet
+
+These conventions are nearly universal across pharma SAPs. Memorize them; downstream reviewers will assume them.
+
+| Statistic                        | Typical decimals | Example                |
+|----------------------------------|------------------|------------------------|
+| Counts (`n`, `N`)                | 0                | `86`                   |
+| Percentages (`p`)                | 1                | `61.6%`                |
+| Mean                             | 1                | `75.2`                 |
+| Standard deviation (`sd`)        | 2                | `8.12`                 |
+| Median, quartiles                | 1                | `76.0`, `(70, 81)`     |
+| Min, Max                         | 0 (integers) or 1 (real-valued)  | `52, 89` or `52.0, 89.0` |
+| p-value                          | 3-4 with `<0.001` threshold | `0.234`, `<0.001` |
+| Hazard ratio, odds ratio         | 2-3              | `0.78`                 |
+| Confidence interval bounds       | match the point estimate | `(0.65, 0.95)` |
+
+The rule is *one more decimal than the precision the reader cares about, and never more than the data justifies.* A weight measured to the nearest kilogram should not produce a mean reported to four decimals.
+
+---
+
+### 3.9 `apply_fmt_fun()` — The Formatting Pipeline
+
+Specifying `fmt_fun` is only half the work. To actually fill in the `stat_fmt` column, you pipe the ARD through `apply_fmt_fun()`:
+
+```
+   ard_continuous(... fmt_fun = list(...))
+                |
+                |  produces stat (raw) and the formatting rule
+                v
+        apply_fmt_fun()
+                |
+                |  evaluates each rule, writes stat_fmt
+                v
+   ARD with both stat and stat_fmt populated
+```
+
+The two-step design is deliberate. You can:
+
+- Compute once and re-format many times by re-piping through `apply_fmt_fun()` with a different `fmt_fun`.
+- Inspect raw `stat` values before formatting (great for QC).
+- Stack many partially-formatted ARDs before deciding on a unified formatting pass at the end.
+
+> **SAS analog:** writing a `FORMAT` statement and then running the dataset through `PROC PRINT` is the moment the format actually executes. `apply_fmt_fun()` is the explicit "now apply the format" step.
+
+---
+
+### 3.10 List-Columns and `unlist_ard_columns()`
+
+The `stat` column is a **list-column** because not every statistic returns a single number. A 95% CI returns a length-2 vector. A vector of quantiles returns a vector. By storing each row's value as a list element, `{cards}` keeps the raw R object alive without forcing a coercion.
+
+The same is true of `stat_fmt`. Even though a formatted string is "just text", it lives in a list-column to mirror `stat` exactly.
+
+This is convenient for the *computation* but inconvenient for *display* — many downstream tools (`gt`, `flextable`, `kable`, generic `dplyr::select()` pipes) prefer plain atomic vectors. `unlist_ard_columns()` is the bridge:
+
+```r
+ard_demog %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, group1_level, stat_name, stat_fmt)
+```
+
+Two behaviors worth knowing:
+
+- **Default behavior** unlists *all* list-columns it finds; passing `columns = stat_fmt` flattens only that one.
+- **NULL safety:** standard R `unlist()` silently drops `NULL` elements, which shrinks the row count and produces a misaligned vector. `unlist_ard_columns()` replaces `NULL` with `NA` first, preserving row alignment. This is the kind of bug that wastes hours if you reach for base R.
+
+> **SAS analog:** there is no real one — SAS does not have list-columns. The closest mental model is a variable whose value can be a delimited string of multiple numbers; you would have to `SCAN()` it apart for display. `unlist_ard_columns()` is the `SCAN()` step, except it is safe and standardized.
 
 ---
 
@@ -162,6 +402,58 @@ grade_result(
 )
 ```
 
+> **Notice the pipeline:** `ard_continuous()` produced `stat` and recorded the rule, `apply_fmt_fun()` materialized `stat_fmt`, `unlist_ard_columns()` flattened the list-column so `select()` could behave normally. Four steps, one direction, no surprises.
+
+---
+
+## Exercise 3.3 — One Call With `ard_stack()`
+
+Reproduce the AGE-plus-SEX demographic ARD from Exercise 3.1, but in a single `ard_stack()` call. Also turn on `.total_n` so the header denominator row is included automatically.
+
+``` {r ch3-ex3, exercise=TRUE, exercise.lines=15}
+# Hint: pass ard_continuous(variables = AGE) and ard_categorical(variables = SEX)
+# directly as arguments to ard_stack(). Use .by for stratification.
+
+ard_demog_stack <- ard_stack(
+  data = adsl,
+  ard_continuous(variables = ___),
+  ard_categorical(variables = ___),
+  .by      = TRT01A,
+  .total_n = TRUE
+)
+
+ard_demog_stack
+```
+
+``` {r ch3-ex3-hint-1}
+ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by      = TRT01A,
+  .total_n = TRUE
+)
+```
+
+``` {r ch3-ex3-solution}
+ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by      = TRT01A,
+  .total_n = TRUE
+)
+```
+
+``` {r ch3-ex3-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && all(c("AGE", "SEX") %in% .result$variable) && "N" %in% .result$stat_name, "Excellent! One ard_stack() call produced the AGE block, the SEX block, and the total-N header row — all stacked and validated."),
+  fail_if(~ TRUE, "Pass AGE to ard_continuous() and SEX to ard_categorical(), set .by = TRT01A and .total_n = TRUE.")
+)
+```
+
+> **Compare with Exercise 3.1:** same rows, fewer lines, automatic total-N. This is the typical production pattern.
+
 ---
 
 ## Chapter 3 Knowledge Check
@@ -195,6 +487,51 @@ quiz(
     answer("stat_label"),
     answer("context"),
     allow_retry = TRUE
+  ),
+
+  question(
+    "Which combination of ARD columns defines a 'duplicate' row that `bind_ard()` will reject?",
+    answer("Any two rows with the same `stat_fmt` string."),
+    answer("Any two rows with the same `variable` and `group1_level`."),
+    answer("Any two rows with the same `group1_level`, `variable`, `variable_grp_level`, and `stat_name`.", correct = TRUE),
+    answer("Any two rows produced by the same `{cards}` function."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "When should you reach for `ard_stack()` instead of `bind_ard()`?",
+    answer("When the inner calls share the same `data`, `by`, and population — `ard_stack()` removes the boilerplate.", correct = TRUE),
+    answer("When you have a single `ard_continuous()` call to make."),
+    answer("When the inputs come from different studies."),
+    answer("Never — `bind_ard()` is always preferred."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why does `{cards}` store statistics in list-columns instead of plain numeric vectors?",
+    answer("To make the code look more functional."),
+    answer("Because some statistics (CIs, quantile vectors) return more than one value, and list-columns preserve that shape.", correct = TRUE),
+    answer("Because base R requires it for `bind_rows()`."),
+    answer("To stop users from running calculations on the raw `stat` values."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why use `unlist_ard_columns()` rather than base R `unlist()` to flatten `stat_fmt`?",
+    answer("It is faster."),
+    answer("It replaces `NULL` elements with `NA`, preserving row alignment instead of silently dropping rows.", correct = TRUE),
+    answer("It is a syntactic alias — they behave identically."),
+    answer("Because `unlist()` is deprecated."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Inside `fmt_fun = list(AGE = list(mean = 1, sd = 2))`, what does the inner number represent?",
+    answer("The number of statistic rows to keep."),
+    answer("The number of decimal places used when formatting that statistic.", correct = TRUE),
+    answer("The number of treatment arms."),
+    answer("The position of the statistic in the table."),
+    allow_retry = TRUE
   )
 )
 ```
@@ -204,8 +541,16 @@ quiz(
 ## Chapter 3 Summary {.congratulations}
 
 You now know:
-- How to stack multiple ARD data frames using **`bind_ard()`**.
-- How `bind_ard()` protects against data duplication.
-- How to configure decimal places and formatting rules using the **`fmt_fun`** list inside calculation functions.
 
-**Next:** Chapter 4 — Extended Stats with `{cardx}` (Hypothesis tests and Kaplan-Meier curves)
+- Why stacking exists: a real clinical table is the union of many small ARDs, and the union has to be safe.
+- How to combine ARDs with **`bind_ard()`** and what invariants it enforces (schema, duplicates, list-column preservation).
+- What counts as a duplicate row in an ARD and how to avoid producing duplicates in the first place.
+- How to collapse many `{cards}` calls into one with **`ard_stack()`**, including the meaning of its dotted arguments (`.by`, `.total_n`, `.missing`, `.overall`, `.attributes`).
+- When to prefer `ard_stack()` over `bind_ard()` and vice versa.
+- Why formatting is a separate, explicit step in the ARD workflow — auditability and re-rendering.
+- How to write a `fmt_fun` specification keyed by variable and statistic, using integer-shorthand or full functions.
+- The clinical decimal conventions reviewers will expect.
+- The **`apply_fmt_fun()`** pipeline that materializes `stat_fmt` from `stat`.
+- Why `stat` and `stat_fmt` are list-columns and how to flatten them safely with **`unlist_ard_columns()`**.
+
+**Next:** Chapter 4 — Extended Stats with `{cardx}` (hypothesis tests, Kaplan-Meier curves, and other inferential outputs that follow the same ARD shape).

@@ -47,39 +47,409 @@ adtte <- adtte_onco %>%
 
 ## Chapter 4: Extended Stats with cardx
 
-### 4.1 Statistical Testing & Survival Wrap-ups
+### 4.1 Why `{cardx}` Exists — A Two-Package Design
 
-`{cardx}` extends the `{cards}` ecosystem by wrapping standard R statistical analysis packages (like `{stats}` and `{survival}`). Rather than returning raw model outputs or complex vectors, `{cardx}` functions process the math and return a standardized ARD dataset.
+`{cards}` deliberately stops at descriptive summaries (counts, means, percentages, missingness). It carries almost no dependencies and never asks R to load a statistical-modeling engine. That keeps it fast, light, and easy to validate.
 
-Key statistical test functions include:
-- `ard_stats_t_test()`: Run a t-test to compare means.
-- `ard_stats_fisher_test()`: Run a Fisher's exact test for categorical variables.
-- `ard_cmh_test()`: Cochran-Mantel-Haenszel test.
-- `ard_survival_survfit()`: Extract Kaplan-Meier survival estimates at specific time points.
+But a clinical table almost always needs *inferential* statistics too: p-values, confidence intervals, hazard ratios, Kaplan-Meier estimates, ANOVA F-tests. Those calculations require packages like `{stats}`, `{survival}`, `{broom.helpers}`, `{emmeans}`, and others. Loading them all into `{cards}` would defeat the "small core" design.
 
-### 4.2 Formatting Statistics in cardx
+`{cardx}` ("cards eXtended") is the answer: a separate package that takes the dependencies on those modeling engines and wraps them in the exact same ARD shape you already learned. *Same columns, same `stat`/`stat_fmt` pair, same list-columns, same `apply_fmt_fun()` pipeline.* From a layout engine's point of view, an `{cardx}` row is indistinguishable from a `{cards}` row.
 
-Statistical test functions in `{cardx}` return multiple values (e.g., test statistics, confidence intervals, p-values). Formatting these values is managed in two ways:
+```
+                +----------------------+
+                |  {cards}  (light)    |
+                |  - ard_continuous    |
+                |  - ard_categorical   |
+                |  - ard_dichotomous   |
+                |  - ard_missing       |
+                |  - ard_total_n       |
+                +-----------+----------+
+                            |
+                            |  same ARD schema
+                            v
+                +-----------+----------+
+                |  {cardx}  (heavy)    |
+                |  - ard_stats_*       |   wraps stats::t.test, etc.
+                |  - ard_survival_*    |   wraps survival::survfit
+                |  - ard_regression    |   wraps broom.helpers
+                |  - ard_emmeans_*     |   wraps emmeans
+                |  - ard_effectsize_*  |   wraps effectsize
+                +----------------------+
+                            |
+                            v
+              bind_ard() / ard_stack() it
+              with descriptive ARDs into
+              one layout-ready dataset.
+```
 
-1. **`apply_fmt_fun()`**: This function reads the formatting rules defined in the `fmt_fun` column of the ARD, applies them to the raw values in the `stat` column, and appends the **`stat_fmt`** column (which holds the display text).
-2. **Modifying formatting rules:**
-   - **During Calculation:** You can pass a named list to the `fmt_fun` argument mapping statistics to decimal integers or custom formatting functions:
-     ```r
-     ard_stats_t_test(
-       data = adsl_2groups, 
-       variables = AGE, 
-       by = TRT01A,
-       fmt_fun = list(p.value = 3, estimate = 1)
-     )
-     ```
-   - **Post-Calculation:** You can modify the formatting rules of an already-computed ARD using **`update_ard_fmt_fun()`** before you call `apply_fmt_fun()`:
-     ```r
-     ard_ttest %>%
-       update_ard_fmt_fun(p.value = 4) %>%  # Change p-value format to 4 decimals
-       apply_fmt_fun()
-     ```
-3. **Safely flattening columns:**
-   - Because hypothesis tests and models return metadata rows (like the statistical `method`) that aren't formatted, `stat_fmt` will contain `NULL` for those rows. Direct use of R's `unlist()` will drop these `NULL`s, resulting in vector length mismatches. Always use **`unlist_ard_columns()`** (or `unlist_ard_columns(columns = stat_fmt)`) to safely flatten the column while keeping the row count intact.
+> **SAS analog mental model:** in SAS, `PROC FREQ`, `PROC MEANS`, `PROC LIFETEST`, `PROC LOGISTIC`, and `PROC GLM` are all separate procedures with separate keyword grammars and separate `ODS OUTPUT` dataset names. Imagine if every one of them emitted an `ODS OUTPUT` dataset with identical column names, validated by the same dictionary. That is what `{cards}` + `{cardx}` deliver together.
+
+---
+
+### 4.2 The `{cardx}` Function Family — One Stop for Every Common Test
+
+`{cardx}` is organized into prefixes by what it wraps. Recognizing the prefix tells you which kind of statistical engine is doing the work underneath.
+
+| Prefix                  | Engine wrapped                      | Typical use                                     |
+|-------------------------|-------------------------------------|-------------------------------------------------|
+| `ard_stats_*`           | base R `stats::` functions          | t-test, Wilcoxon, Chi-square, Fisher, ANOVA     |
+| `ard_survival_*`        | `survival::`                        | Kaplan-Meier, log-rank, survival differences    |
+| `ard_regression*`       | `broom.helpers::tidy_plus_plus()`   | Any model: lm, glm, coxph, lmer, ...            |
+| `ard_emmeans_*`         | `emmeans::`                         | LS-means, contrasts, pairwise differences       |
+| `ard_effectsize_*`      | `effectsize::`                      | Cohen's d, Hedges' g                            |
+| `ard_smd_smd()`         | `smd::`                             | Standardized mean differences (propensity work) |
+| `ard_continuous_ci()`   | `stats::`                           | Confidence intervals around descriptive means   |
+| `ard_categorical_ci()`  | `stats::` / proportions             | Confidence intervals around proportions         |
+| `ard_incidence_rate()`  | exact Poisson                       | Adverse event incidence rates                   |
+| `ard_survey_svy*`       | `survey::`                          | Survey-weighted variants of the same tests      |
+
+The next sub-sections walk through the families a SAS programmer is most likely to recognize, each paired with its closest `PROC` analog. The two existing exercises (t-test, KM) are followed by two new ones (Fisher's, log-rank).
+
+---
+
+### 4.3 The Shape of an Inferential ARD Row
+
+Inferential outputs add a few new `stat_name` values that descriptive ARDs do not have:
+
+| `stat_name`     | Meaning                                                       |
+|-----------------|---------------------------------------------------------------|
+| `estimate`      | The point estimate (mean difference, OR, HR, prob, etc.)      |
+| `statistic`     | The test statistic (t, χ², F, Z, log-rank statistic)          |
+| `parameter`     | Degrees of freedom (or other model parameter)                 |
+| `p.value`       | The p-value                                                   |
+| `conf.low` / `conf.high` | Confidence interval bounds                           |
+| `method`        | A human-readable description of the test that was run         |
+
+The first five are numeric and live in `stat` as before. The `method` row is *metadata*: a character string describing the test, with `stat_fmt = NULL` because there is nothing to format. That metadata row is what causes the `unlist_ard_columns()` issue you will see in section 4.15 — base R `unlist()` drops `NULL` and your row count silently shrinks.
+
+> **SAS analog:** in the `OUT=` dataset of `PROC TTEST` or in `ODS OUTPUT TTests=` you see exactly these quantities (`tValue`, `DF`, `Probt`, `Estimate`, `LowerCL`, `UpperCL`, `Method`). `{cardx}` standardizes the naming so all tests use the same column vocabulary.
+
+---
+
+### 4.4 Two-Sample Mean Comparisons — t-test and Friends
+
+#### 4.4.1 `ard_stats_t_test()` — the `PROC TTEST` equivalent
+
+Compares the means of one numeric variable across exactly two groups.
+
+```r
+ard_stats_t_test(
+  data      = adsl_2groups,
+  variables = AGE,
+  by        = TRT01A
+)
+```
+
+Returns rows for `estimate` (mean difference), `statistic` (the t value), `parameter` (df), `p.value`, `conf.low`/`conf.high`, and `method`.
+
+> **SAS analog:** `PROC TTEST DATA=adsl_2groups; CLASS TRT01A; VAR AGE; RUN;` — same setup, same outputs, ARD shape instead of two SAS datasets.
+
+If you pass more than two groups to `by`, `ard_stats_t_test()` will error. Pre-filter the data to exactly the two arms you want to compare.
+
+#### 4.4.2 `ard_stats_paired_t_test()` — within-subject mean change
+
+For paired designs (baseline vs. post-treatment within the same subject), the paired variant compares the mean *change* against zero:
+
+```r
+ard_stats_paired_t_test(
+  data      = adlb_diff,
+  variables = CHG,
+  by        = AVISIT,
+  id        = USUBJID
+)
+```
+
+> **SAS analog:** `PROC TTEST; PAIRED BASELINE*POST;` — same idea, ARD shape.
+
+#### 4.4.3 `ard_stats_wilcox_test()` — the non-parametric alternative
+
+When normality is in doubt (small sample, skewed labs, count outcomes), use the Wilcoxon rank-sum test:
+
+```r
+ard_stats_wilcox_test(
+  data      = adsl_2groups,
+  variables = AGE,
+  by        = TRT01A
+)
+```
+
+> **SAS analog:** `PROC NPAR1WAY WILCOXON; CLASS TRT01A; VAR AGE; RUN;`.
+
+#### 4.4.4 `ard_stats_t_test_onesample()` — one-sample test
+
+Tests whether the mean of a single variable differs from a fixed value (default zero):
+
+```r
+ard_stats_t_test_onesample(
+  data      = adlb_chg,
+  variables = CHG,
+  mu        = 0
+)
+```
+
+> **SAS analog:** `PROC TTEST; VAR CHG; H0 = 0;`.
+
+---
+
+### 4.5 Multi-Group Mean Comparisons — ANOVA and Kruskal-Wallis
+
+#### 4.5.1 `ard_stats_oneway_test()` — the F-test (Welch-corrected)
+
+When you have three or more arms and want a single overall F-test:
+
+```r
+ard_stats_oneway_test(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A
+)
+```
+
+> **SAS analog:** `PROC GLM; CLASS TRT01A; MODEL AGE = TRT01A; RUN;` — but only the omnibus F line, not the full Type-III table.
+
+#### 4.5.2 `ard_stats_aov()` and `ard_stats_anova()` — the full ANOVA table
+
+`ard_stats_aov()` wraps base `aov()` and returns the classical ANOVA table (sums of squares, F, p) for a fitted model. `ard_stats_anova()` accepts an already-fitted model and `tidy()`s its ANOVA decomposition.
+
+> **SAS analog:** `PROC ANOVA;` / `PROC GLM;` Type I/III tables. Same kinds of rows; one row per term in the model, each with its F statistic and p-value.
+
+#### 4.5.3 `ard_stats_kruskal_test()` — non-parametric multi-group
+
+```r
+ard_stats_kruskal_test(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A
+)
+```
+
+> **SAS analog:** `PROC NPAR1WAY WILCOXON; CLASS TRT01A; VAR AGE;` — the chi-square approximation it reports under "Kruskal-Wallis Test" is the same statistic.
+
+---
+
+### 4.6 Effect Sizes — Cohen's d, Hedges' g, SMD
+
+Effect sizes quantify *how big* a difference is, independent of sample size. Required by ICH E9(R1) for many summaries and by HTA agencies.
+
+| Function                                  | Effect size                                                   |
+|-------------------------------------------|---------------------------------------------------------------|
+| `ard_effectsize_cohens_d()`               | Cohen's d (standardized mean difference, two-sample)          |
+| `ard_effectsize_hedges_g()`               | Hedges' g (small-sample-corrected Cohen's d)                  |
+| `ard_effectsize_paired_cohens_d()`        | Paired Cohen's d                                              |
+| `ard_smd_smd()`                           | Standardized mean difference — used in propensity-score balance tables |
+
+> **SAS analog:** typically hand-computed from `PROC TTEST` outputs in SAS. `{cardx}` collapses that into one call that returns the standard ARD row with `estimate`, `conf.low`, `conf.high`, and `method`.
+
+---
+
+### 4.7 Categorical Tests — Chi-Square, Fisher, McNemar
+
+#### 4.7.1 `ard_stats_chisq_test()` — Pearson's χ²
+
+The default test for treatment-arm by response, treatment-arm by sex, AE preferred-term by arm, etc.
+
+```r
+ard_stats_chisq_test(
+  data      = adsl,
+  variables = SEX,
+  by        = TRT01A
+)
+```
+
+> **SAS analog:** `PROC FREQ; TABLES SEX*TRT01A / CHISQ;`. Returns the `statistic` (χ²), `parameter` (df), `p.value`, and `method` rows.
+
+#### 4.7.2 `ard_stats_fisher_test()` — Fisher's exact test
+
+Required for sparse tables (any expected cell count < 5) and the default test in many adverse-event tables. Identical call signature; the engine switches under the hood.
+
+```r
+ard_stats_fisher_test(
+  data      = adsl,
+  variables = SEX,
+  by        = TRT01A
+)
+```
+
+> **SAS analog:** `PROC FREQ; TABLES SEX*TRT01A / FISHER;` or the `EXACT FISHER;` statement in `PROC FREQ`.
+
+#### 4.7.3 `ard_stats_mcnemar_test()` — paired categorical (binary)
+
+For matched / paired binary data (case-control matched on covariates, before/after binary measurements):
+
+```r
+ard_stats_mcnemar_test(
+  data      = adam_paired,
+  variables = c(RESP_PRE, RESP_POST)
+)
+```
+
+> **SAS analog:** `PROC FREQ; TABLES RESP_PRE*RESP_POST / AGREE;` and reading the McNemar's row.
+
+#### 4.7.4 `ard_stats_prop_test()` — comparing two proportions
+
+A direct test of whether two proportions differ, with confidence interval on the difference:
+
+```r
+ard_stats_prop_test(
+  data      = adae_summary,
+  variables = AE_RESP,
+  by        = TRT01A
+)
+```
+
+> **SAS analog:** `PROC FREQ; TABLES TRT01A*AE_RESP / RISKDIFF;` and the corresponding `Pr(z)` column.
+
+---
+
+### 4.8 Stratified Categorical — Mantel-Haenszel / CMH
+
+#### 4.8.1 `ard_stats_mantelhaen_test()` — the CMH test
+
+The Cochran-Mantel-Haenszel test is the workhorse stratified categorical test in clinical trials (e.g., response rate comparison stratified by region or by baseline severity). The function name in current `{cardx}` is `ard_stats_mantelhaen_test()` — the older alias `ard_cmh_test()` may also appear in older code paths.
+
+```r
+ard_stats_mantelhaen_test(
+  data      = adsl,
+  variables = RESPFL,
+  by        = TRT01A,
+  strata    = REGION
+)
+```
+
+> **SAS analog:** `PROC FREQ; TABLES REGION*TRT01A*RESPFL / CMH;` — and reading the Mantel-Haenszel χ² row from `ODS OUTPUT CMH=`. `{cardx}` returns the same `statistic`, `parameter`, `p.value`, `method` rows in standard ARD shape.
+
+The CMH test is the standard answer to "give me a treatment p-value adjusted for the strata I designed the trial around."
+
+---
+
+### 4.9 Proportions, Rates, and Counts
+
+#### 4.9.1 `ard_categorical_ci()` — proportion with confidence interval
+
+Adds CI rows around a binomial proportion (Clopper-Pearson by default; many methods available):
+
+```r
+ard_categorical_ci(
+  data      = adsl,
+  variables = RESPFL,
+  by        = TRT01A,
+  method    = "exact"
+)
+```
+
+> **SAS analog:** `PROC FREQ; TABLES RESPFL / BINOMIAL(EXACT);`.
+
+#### 4.9.2 `ard_continuous_ci()` — CI around a mean
+
+Adds `conf.low`/`conf.high` rows for the mean of a continuous variable:
+
+```r
+ard_continuous_ci(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A
+)
+```
+
+> **SAS analog:** `PROC MEANS CLM;` — that `LowerCL` and `UpperCL` pair, but in ARD shape.
+
+#### 4.9.3 `ard_incidence_rate()` — exposure-adjusted rate
+
+Adverse-event incidence per 100 person-years (or any denominator unit). Wraps an exact Poisson CI under the hood.
+
+> **SAS analog:** hand-computed from `PROC GENMOD DIST=POISSON` outputs or `PROC FREQ` over person-time. `{cardx}` collapses that into one ARD-shaped call.
+
+#### 4.9.4 `ard_stats_poisson_test()` — Poisson rate test
+
+Compares an observed event count to an expected one under a Poisson assumption.
+
+> **SAS analog:** `PROC GENMOD DIST=POISSON; MODEL events / offset = log_pyears;` and reading the rate p-value.
+
+---
+
+### 4.10 LS-Means and Contrasts via `ard_emmeans_*`
+
+Pre-specified comparisons in mixed-model designs (the staple of MMRM analyses for continuous endpoints) live in `{emmeans}`. `{cardx}` wraps three of its most useful outputs:
+
+| Function                       | Produces                                                             |
+|--------------------------------|----------------------------------------------------------------------|
+| `ard_emmeans_emmeans()`        | LS-means with standard errors and CIs at each level of a factor.     |
+| `ard_emmeans_mean_difference()`| Pairwise LS-mean differences (e.g., active − placebo).               |
+| `ard_emmeans_contrast()`       | Arbitrary user-defined linear contrasts.                             |
+
+> **SAS analog:** `LSMEANS TRT01A / CL DIFF;` and `LSMESTIMATE ... ;` statements in `PROC MIXED` / `PROC GLIMMIX`. Same outputs, ARD-shaped rows.
+
+---
+
+### 4.11 Survival Analysis — KM and Log-Rank
+
+#### 4.11.1 `ard_survival_survfit()` — Kaplan-Meier point estimates
+
+KM survival probabilities at specified time points, per treatment arm.
+
+```r
+ard_survival_survfit(
+  x         = adtte_os,
+  y         = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A,
+  times     = c(6, 12)
+)
+```
+
+The result has one block of rows per (treatment arm × time point), with `stat_name` values such as `n.risk`, `n.event`, `estimate` (survival probability), `std.error`, `conf.low`, `conf.high`. The time point lives in `variable_level`.
+
+> **SAS analog:** `PROC LIFETEST DATA=adtte_os; TIME AVAL*CNSR(1); STRATA TRT01A; RUN;` — the Survival Estimates table, sliced to the time points you want.
+
+A few notes on the encoding of censorship:
+
+- `Surv(time, event_indicator)` expects **event=1, censored=0**.
+- ADaM convention puts that the other way around: `CNSR = 1` means censored.
+- Hence `Surv(AVAL, 1 - CNSR)` — flip the indicator before feeding `Surv()`.
+- The same trap exists in SAS: `TIME AVAL*CNSR(1);` tells SAS that `CNSR = 1` is the censored value, *not* the event value. Same conceptual flip, expressed differently.
+
+#### 4.11.2 `ard_survival_survdiff()` — log-rank test
+
+The omnibus test of "do the KM curves differ?":
+
+```r
+ard_survival_survdiff(
+  data      = adtte_os,
+  y         = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A
+)
+```
+
+Returns `statistic` (log-rank χ²), `parameter` (df), `p.value`, `method`.
+
+> **SAS analog:** the "Test of Equality over Strata" table from `PROC LIFETEST` — specifically the `Log-Rank` row.
+
+#### 4.11.3 `ard_survival_survfit_diff()` — survival probability difference
+
+Difference in survival probability at a given time point between two arms, with CI:
+
+```r
+ard_survival_survfit_diff(
+  x         = adtte_os,
+  y         = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A,
+  times     = 12
+)
+```
+
+> **SAS analog:** there is no direct PROC counterpart; this is typically hand-computed from two `PROC LIFETEST` runs in SAS workflows.
+
+---
+
+### 4.12 Regression Model ARDs — `ard_regression()` Preview
+
+Chapter 5 dives deep into model tidying. The headline: `ard_regression()` accepts an already-fitted model object (`lm`, `glm`, `coxph`, `lmer`, `polr`, ...) and returns an ARD with one block of rows per coefficient — including the standard estimate / SE / statistic / p.value / conf.low / conf.high columns.
+
+```r
+fit <- glm(AEFL ~ TRT01A + AGE + SEX, data = adsl, family = binomial)
+ard_regression(fit, exponentiate = TRUE, conf.int = TRUE)
+```
+
+> **SAS analog:** `PROC LOGISTIC; CLASS TRT01A SEX; MODEL AEFL = TRT01A AGE SEX;` and the "Analysis of Maximum Likelihood Estimates" table → exponentiated to "Odds Ratio Estimates."
 
 ---
 
@@ -131,6 +501,8 @@ grade_result(
   fail_if(~ TRUE, "Ensure you are using ard_stats_t_test() on adsl_2groups and selecting the correct columns via apply_fmt_fun().")
 )
 ```
+
+> **Read the rows:** `estimate` is the mean difference between the two arms, `statistic` is the t-value, `parameter` is the degrees of freedom, `p.value` is the two-sided p, `conf.low`/`conf.high` are the 95% CI on the difference, and `method` records that this was Welch's t-test. The same six rows would come back from any other `ard_stats_*` test, just with different numbers.
 
 ---
 
@@ -189,6 +561,204 @@ grade_result(
 )
 ```
 
+> **Notice the `variable_level` column:** the time point appears there, not in a separate column. This is the same long-format design pattern as descriptive ARDs — adding a new time point adds rows, not columns.
+
+---
+
+## Exercise 4.3 — Fisher's Exact Test for SEX × TRT01A
+
+Compare the distribution of `SEX` across treatment arms in the safety population using Fisher's exact test — the default test for sparse cells in adverse-event tables.
+
+```{r ch4-ex3, exercise=TRUE, exercise.lines=15}
+# Filter to the safety population
+adsl_safe <- adsl %>% filter(SAFFL == "Y")
+
+# Run a Fisher's exact test for SEX by TRT01A and format the result.
+# Hint: use ard_stats_fisher_test() with the same variables/by pattern.
+
+ard_fisher <- ard_stats_fisher_test(
+  data = adsl_safe,
+  variables = ___,
+  by = ___
+)
+
+ard_fisher %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, stat_name, stat_label, stat_fmt)
+```
+
+```{r ch4-ex3-hint-1}
+ard_stats_fisher_test(adsl %>% filter(SAFFL == "Y"),
+                      variables = SEX, by = TRT01A)
+```
+
+```{r ch4-ex3-solution}
+ard_fisher <- ard_stats_fisher_test(
+  data = adsl %>% filter(SAFFL == "Y"),
+  variables = SEX,
+  by = TRT01A
+)
+ard_fisher %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, stat_name, stat_label, stat_fmt)
+```
+
+```{r ch4-ex3-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "p.value" %in% .result$stat_name, "Nice! Fisher's exact test ran and the ARD now contains the p.value row alongside estimate and method — same shape as the t-test ARD."),
+  fail_if(~ TRUE, "Pass SEX to variables and TRT01A to by inside ard_stats_fisher_test().")
+)
+```
+
+> **Same shape, different test:** notice the output schema is identical to the t-test exercise above — the only differences are which `stat_name` values appear and which method string is recorded. That uniformity is precisely why a layout engine can render any `{cardx}` output without knowing which test produced it.
+
+---
+
+## Exercise 4.4 — Log-Rank Test on Overall Survival
+
+The log-rank test asks "do the KM curves for the treatment arms differ?". It is the standard omnibus efficacy test for time-to-event endpoints.
+
+```{r ch4-ex4, exercise=TRUE, exercise.lines=15}
+# Use the OS subset you built for Exercise 4.2
+adtte_os <- adtte %>% filter(PARAMCD == "OS")
+
+# Run the log-rank test for TRT01A.
+# Hint: ard_survival_survdiff() takes data=, y=Surv(...), variables=TRT01A.
+
+ard_logrank <- ard_survival_survdiff(
+  data = adtte_os,
+  y = Surv(AVAL, 1 - CNSR),
+  variables = ___
+)
+
+ard_logrank %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(stat_name, stat_label, stat_fmt)
+```
+
+```{r ch4-ex4-hint-1}
+ard_survival_survdiff(
+  data = adtte %>% filter(PARAMCD == "OS"),
+  y = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A
+)
+```
+
+```{r ch4-ex4-solution}
+ard_logrank <- ard_survival_survdiff(
+  data = adtte %>% filter(PARAMCD == "OS"),
+  y = Surv(AVAL, 1 - CNSR),
+  variables = TRT01A
+)
+ard_logrank %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(stat_name, stat_label, stat_fmt)
+```
+
+```{r ch4-ex4-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "p.value" %in% .result$stat_name, "Perfect — the log-rank test ran and the ARD captured statistic, df, p.value, and method in the standard shape."),
+  fail_if(~ TRUE, "Pass TRT01A to variables and Surv(AVAL, 1 - CNSR) to y.")
+)
+```
+
+> **SAS check:** the p-value row corresponds to the `Pr > Chi-Square` value next to `Log-Rank` in the "Test of Equality over Strata" table from `PROC LIFETEST`. If you ran the same data through both, the two p-values should agree to many decimal places.
+
+---
+
+### 4.13 Formatting `{cardx}` Outputs
+
+#### 4.13.1 Setting `fmt_fun` at calculation time
+
+Every `{cardx}` function takes the same nested `fmt_fun` argument you learned in Chapter 3. Two common patterns:
+
+```r
+# Round p-values to 3 decimals, the rest to defaults
+ard_stats_t_test(
+  data      = adsl_2groups,
+  variables = AGE,
+  by        = TRT01A,
+  fmt_fun   = list(AGE = list(p.value = 3, estimate = 1))
+)
+```
+
+The keys at the inner level are `stat_name` values like `p.value`, `estimate`, `statistic`, `conf.low`, `conf.high`. The outer keys are the `variable` names.
+
+#### 4.13.2 Updating an existing ARD with `update_ard_fmt_fun()`
+
+When you have already calculated an ARD and want to re-format it without re-running the test:
+
+```r
+ard_ttest %>%
+  update_ard_fmt_fun(p.value = 4) %>%   # bump p.value to 4 decimals
+  apply_fmt_fun()
+```
+
+This is the cheap way to switch between submission-grade formatting (typically 3-4 decimals on p-values) and exploratory-grade formatting (looser) without recomputing.
+
+#### 4.13.3 The `NULL` `stat_fmt` gotcha for `method` rows
+
+Test ARDs always include a `method` row whose `stat` is a character string ("Welch Two Sample t-test") and whose `stat_fmt` is `NULL` — there is nothing to format. If you flatten with base R `unlist()`, those `NULL`s are silently dropped, your vector becomes shorter than the ARD's row count, and `select()` / `bind_cols()` fall over.
+
+Always use `unlist_ard_columns(columns = stat_fmt)`. It replaces `NULL` with `NA` and preserves the row alignment that downstream layout code depends on.
+
+```
+   Without unlist_ard_columns():
+     row count of stat_fmt: 6
+     row count of ARD:      7  <-- mismatch -> downstream error
+
+   With unlist_ard_columns():
+     row count of stat_fmt: 7  <-- NA fills the method row, alignment kept
+     row count of ARD:      7
+```
+
+> **SAS analog:** the same trap exists when you subset `ODS OUTPUT` datasets in a DATA step and drop "method" or "label" rows accidentally. The `unlist_ard_columns()` wrapper is the equivalent of always using `IF NOT MISSING(_LABEL_);` *carefully* — i.e., never.
+
+---
+
+### 4.14 Stacking Inferential with Descriptive
+
+The big payoff: `{cardx}` rows can be `bind_ard()`ed with `{cards}` rows because they share the same schema. A typical demographics-plus-p-value table is one stack:
+
+```r
+ard_demog <- ard_stack(
+  data = adsl_2groups,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by      = TRT01A,
+  .total_n = TRUE
+)
+
+ard_pvals <- bind_ard(
+  ard_stats_t_test(adsl_2groups, variables = AGE, by = TRT01A),
+  ard_stats_fisher_test(adsl_2groups, variables = SEX, by = TRT01A)
+)
+
+ard_final <- bind_ard(ard_demog, ard_pvals)
+```
+
+`ard_final` is one tall ARD that contains every cell needed to render a demographics table with a "p-value" column attached — descriptive rows, inferential rows, header denominator rows, all in the same shape.
+
+```
+                +--------------------+
+                |  ard_demog rows    |   <-- {cards}: descriptive
+                +--------------------+
+                +--------------------+
+                |  ard_pvals rows    |   <-- {cardx}: inferential
+                +--------------------+
+                            |
+                            v
+                +--------------------+
+                |  ard_final         |   <-- one input, one layout call
+                +--------------------+
+```
+
+The fact that this works without renaming a single column is the entire point of the two-package design.
+
 ---
 
 ## Chapter 4 Knowledge Check
@@ -213,6 +783,60 @@ quiz(
     answer("In the `group1_level` column"),
     answer("As list elements within a single row"),
     allow_retry = TRUE
+  ),
+
+  question(
+    "Your ADaM `CNSR` column is `1 = censored`. What survival response do you pass to `ard_survival_survfit()`?",
+    answer("`Surv(AVAL, CNSR)`"),
+    answer("`Surv(AVAL, 1 - CNSR)`", correct = TRUE),
+    answer("`Surv(AVAL)`"),
+    answer("`Surv(CNSR, AVAL)`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which `{cardx}` function is the equivalent of `PROC FREQ; TABLES SEX*TRT01A / CHISQ;` in SAS?",
+    answer("`ard_stats_t_test()`"),
+    answer("`ard_stats_chisq_test()`", correct = TRUE),
+    answer("`ard_survival_survdiff()`"),
+    answer("`ard_regression()`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which `{cardx}` function corresponds most directly to `PROC LIFETEST` with the `STRATA TRT01A;` log-rank test of equality?",
+    answer("`ard_survival_survfit()`"),
+    answer("`ard_survival_survdiff()`", correct = TRUE),
+    answer("`ard_stats_oneway_test()`"),
+    answer("`ard_regression()`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why must you use `unlist_ard_columns(columns = stat_fmt)` instead of base R `unlist()` on a `{cardx}` test result?",
+    answer("Because `unlist()` is deprecated."),
+    answer("Because test ARDs contain a `method` row whose `stat_fmt` is `NULL`, and base `unlist()` silently drops those rows, breaking row alignment.", correct = TRUE),
+    answer("Because `unlist()` only works on `{cards}` objects, not `{cardx}` objects."),
+    answer("They are identical — using either one is fine."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which `{cardx}` function corresponds to SAS's `PROC FREQ; TABLES REGION*TRT01A*RESPFL / CMH;` stratified test?",
+    answer("`ard_stats_chisq_test()`"),
+    answer("`ard_stats_fisher_test()`"),
+    answer("`ard_stats_mantelhaen_test()`", correct = TRUE),
+    answer("`ard_stats_kruskal_test()`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which `{cardx}` function would you reach for to mimic SAS `PROC NPAR1WAY WILCOXON;` when comparing two arms?",
+    answer("`ard_stats_t_test()`"),
+    answer("`ard_stats_wilcox_test()`", correct = TRUE),
+    answer("`ard_stats_chisq_test()`"),
+    answer("`ard_stats_kruskal_test()` only"),
+    allow_retry = TRUE
   )
 )
 ```
@@ -222,8 +846,24 @@ quiz(
 ## Chapter 4 Summary {.congratulations}
 
 You now know how to:
-- Use **`{cardx}`** functions to run statistical comparisons.
-- Run a t-test and extract statistics using **`ard_stats_t_test()`**.
-- Compute Kaplan-Meier survival rates at specific timepoints using **`ard_survival_survfit()`**.
 
-**Next:** Chapter 5 — Models, `{broom}`, and `{parameters}` (Understanding regression model tidying)
+- Explain why `{cardx}` is split from `{cards}` and what design payoff that split delivers.
+- Recognize the `{cardx}` function prefixes (`ard_stats_*`, `ard_survival_*`, `ard_regression`, `ard_emmeans_*`, `ard_effectsize_*`) and what each family wraps.
+- Map every common SAS PROC for inferential statistics to its `{cardx}` counterpart:
+  - `PROC TTEST` → `ard_stats_t_test()`, `ard_stats_paired_t_test()`, `ard_stats_t_test_onesample()`
+  - `PROC NPAR1WAY` → `ard_stats_wilcox_test()`, `ard_stats_kruskal_test()`
+  - `PROC GLM` / `PROC ANOVA` → `ard_stats_oneway_test()`, `ard_stats_aov()`, `ard_stats_anova()`
+  - `PROC FREQ CHISQ` → `ard_stats_chisq_test()`
+  - `PROC FREQ EXACT` → `ard_stats_fisher_test()`
+  - `PROC FREQ AGREE` → `ard_stats_mcnemar_test()`
+  - `PROC FREQ CMH` → `ard_stats_mantelhaen_test()`
+  - `PROC MEANS CLM` → `ard_continuous_ci()`; binomial CI → `ard_categorical_ci()`
+  - `PROC LIFETEST` Survival Estimates → `ard_survival_survfit()`
+  - `PROC LIFETEST` Log-Rank → `ard_survival_survdiff()`
+  - `LSMEANS` / `LSMESTIMATE` in `PROC MIXED` → `ard_emmeans_emmeans()`, `ard_emmeans_mean_difference()`, `ard_emmeans_contrast()`
+- Read the inferential ARD row shape: `estimate`, `statistic`, `parameter`, `p.value`, `conf.low`, `conf.high`, `method`.
+- Format `{cardx}` outputs both at calculation time (`fmt_fun = list(...)`) and after the fact (`update_ard_fmt_fun()` + `apply_fmt_fun()`).
+- Safely flatten test ARDs with `unlist_ard_columns(columns = stat_fmt)` to avoid the `NULL`-drop bug from base R `unlist()`.
+- Bind inferential ARDs with descriptive ones using `bind_ard()` because the schema is shared — one stacked ARD drives a demographics-plus-p-value table end to end.
+
+**Next:** Chapter 5 — Models, `{broom}`, and `{parameters}` (the deep dive on regression tidying that the `ard_regression()` preview only sketched).

@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 5: Models, broom, and parameters"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.1
+  version: 1.2
 output:
   learnr::tutorial:
     progressive: true
@@ -11,7 +11,7 @@ output:
     css: www/custom.css
 runtime: shiny_prerendered
 description: >
-  Deep dive into statistical model tidying. Understand the roles of broom, parameters, and cardx::ard_regression.
+  Deep dive into statistical model tidying. Understand the roles of broom, parameters, broom.helpers, and cardx::ard_regression as the bridge from fitted R model objects to ARD-shaped rows.
 ---
 
 ```{r setup, include=FALSE}
@@ -23,7 +23,9 @@ library(dplyr)
 library(cards)
 library(cardx)
 library(broom)
+library(broom.helpers)
 library(parameters)
+library(survival)
 library(jsonlite)
 library(glue)
 
@@ -34,12 +36,37 @@ gradethis_setup()
 
 # Load datasets
 data("adsl",  package = "pharmaverseadam")
+data("adtte_onco", package = "pharmaverseadam")
+adtte <- adtte_onco %>%
+  left_join(
+    adsl %>%
+      mutate(ITTFL = ifelse(!is.na(ARM) & ARM != "", "Y", "N")) %>%
+      select(USUBJID, TRT01A, ITTFL),
+    by = "USUBJID"
+  )
 
-# Pre-fit model for use in exercises
+# Derived dataset with a binary response flag for logistic exercises
+adsl_resp <- adsl %>%
+  mutate(COMPLFL = ifelse(EOSSTT == "COMPLETED", 1L, 0L))
+
+# Pre-fit a logistic regression for use in many exercises
 fit_logistic <- glm(
-  COMPLFL ~ TRT01A + AGE, 
-  data = adsl %>% mutate(COMPLFL = ifelse(EOSSTT == "COMPLETED", 1, 0)), 
-  family = binomial()
+  COMPLFL ~ TRT01A + AGE,
+  data    = adsl_resp,
+  family  = binomial()
+)
+
+# Pre-fit a linear regression (PROC REG / PROC GLM analog) for use in exercises
+fit_lm <- lm(
+  AGE ~ TRT01A + SEX,
+  data = adsl
+)
+
+# Pre-fit a Cox proportional-hazards model on Overall Survival
+adtte_os <- adtte %>% filter(PARAMCD == "OS")
+fit_cox <- coxph(
+  Surv(AVAL, 1 - CNSR) ~ TRT01A + AGE,
+  data = adtte_os
 )
 ```
 
@@ -47,21 +74,484 @@ fit_logistic <- glm(
 
 ## Chapter 5: Models, broom, and parameters
 
-### 5.1 R Model Extraction and the Tidier Ecosystem
+### 5.1 Why Model Tidying Exists — The Problem It Solves
 
-Statistical models in R are complex, deeply nested lists containing information about coefficients, residuals, convergence, and family. Slicing these lists manually is tedious. 
+When you fit a statistical model in R, the object you get back is not a tidy table. It is a deeply nested *list* — sometimes ten or fifteen named slots deep — containing the coefficients, the residuals, the design matrix, the variance-covariance matrix, the call, the convergence diagnostics, and metadata about the family and link.
 
-The R community developed the **Tidier Ecosystem** to solve this:
-- **`{broom}`**: Provides `tidy()`, which converts a model's coefficients into a standard tibble with columns like `term`, `estimate`, and `p.value`.
-- **`{parameters}`**: A robust alternative from the `{easystats}` suite that extracts detailed parameter tables (via `model_parameters()`) for an even wider range of models.
-- **`{broom.helpers}`**: Acts as an abstraction layer to standardize column headers and add reference levels for clinical reporting.
-- **`{cardx}`**: Leverages these packages to generate regression ARDs using `ard_regression()`.
+Try it: type `str(fit_logistic)` on any fitted model in R, and you will see a wall of output that scrolls off the screen. To pull out "the coefficient for TRT01A and its p-value," you would historically have written something like:
+
+```r
+summary(fit_logistic)$coefficients["TRT01AXanomeline High Dose", c("Estimate", "Pr(>|z|)")]
+```
+
+That is brittle, hard to read, and different for every model class (`lm` uses `Pr(>|t|)`, `glm` uses `Pr(>|z|)`, `coxph` uses `Pr(>|z|)` but in a different slot, `lmer` uses no p-value column at all, and so on).
+
+> **SAS analog:** in SAS, every PROC writes its results to *named* `ODS OUTPUT` datasets — `PROC LOGISTIC` writes `ParameterEstimates`, `PROC REG` writes `ParameterEstimates`, `PROC PHREG` writes `ParameterEstimates`, `PROC MIXED` writes `SolutionF`. The dataset names overlap, but the *column names* in each dataset differ (`Estimate`/`StdErr`/`Probt` here, `Estimate`/`StdErr`/`Probz` there, etc.), forcing the programmer to write per-PROC post-processing every time. R has the same disease in a different costume.
+
+The tidier ecosystem is the cure: a single set of column names (`term`, `estimate`, `std.error`, `statistic`, `p.value`, `conf.low`, `conf.high`) that work for every supported model class. Once your code is written against those columns, swapping `lm` for `glm` for `coxph` for `lmer` becomes a one-line change.
 
 ---
 
-## Exercise 5.1 — Tidy a Logistic Regression Model manually
+### 5.2 The Anatomy of a Fitted R Model
 
-The model `fit_logistic` (Response flag `COMPLFL` vs. Treatment and Age) is already fitted in your environment. Let's use `broom::tidy()` to flatten its outputs into a clean data frame with exponentiated coefficients (to get Odds Ratios) and confidence intervals.
+Before you can appreciate what `tidy()` does, look at the raw shape of a model object.
+
+A fitted `glm` (logistic regression) is an S3 list with roughly twenty slots. The interesting ones are:
+
+| Slot                  | What it stores                                                       |
+|-----------------------|----------------------------------------------------------------------|
+| `coefficients`        | Named numeric vector — the point estimates on the link scale         |
+| `residuals`           | Working residuals at convergence                                     |
+| `fitted.values`       | Predictions on the response scale                                    |
+| `family`              | `family()` object — name, link, variance function                    |
+| `linear.predictors`   | Predictions on the linear-predictor (link) scale                     |
+| `deviance` / `null.deviance` | Model fit and intercept-only deviance                         |
+| `df.residual`         | Residual degrees of freedom                                          |
+| `aic`                 | Akaike Information Criterion                                         |
+| `model`               | The model frame (the actual data used)                               |
+| `terms`               | The formula expanded into terms metadata                             |
+| `qr`                  | QR decomposition of the design matrix (needed for vcov)              |
+| `call`                | Captured function call (used by `update()`)                          |
+
+`summary(fit_logistic)` adds **more** slots — most importantly `coefficients` (a *matrix*, not the original vector, with columns for `Estimate`, `Std. Error`, `z value`, `Pr(>|z|)`).
+
+The variance-covariance matrix, needed for confidence intervals, lives behind `vcov(fit_logistic)`. The CIs themselves are computed by `confint(fit_logistic)`, which by default does a profile likelihood for `glm` (slow) and Wald for `lm` (fast).
+
+> **SAS analog:** the things in `coefficients` correspond to the `Estimate` column of `ODS OUTPUT ParameterEstimates`; the SE/z/p columns correspond to the rest of that dataset. The variance-covariance matrix corresponds to `ODS OUTPUT CovB`. Convergence and fit diagnostics live in `ODS OUTPUT FitStatistics`, `ConvergenceStatus`, `ModelInfo`, etc. — each its own dataset. R puts all of these into one nested object instead of a directory of datasets.
+
+The tidiers' job is to flatten that nested object into a small set of rectangular tibbles.
+
+---
+
+### 5.3 The R Tidier Ecosystem — Three Packages, Three Jobs
+
+There is not one tidier package; there are three that compose. Understanding which does what is the difference between debugging happily and chasing bugs across package boundaries.
+
+| Package           | Function                  | What it returns                                                                 |
+|-------------------|---------------------------|---------------------------------------------------------------------------------|
+| `{broom}`         | `tidy(model)`             | One row per coefficient: `term`, `estimate`, `std.error`, `statistic`, `p.value` |
+| `{broom}`         | `glance(model)`           | One row per model: fit statistics (AIC, BIC, deviance, R², log-likelihood, etc.) |
+| `{broom}`         | `augment(model, data)`    | The original data plus per-observation columns (`.fitted`, `.resid`, `.hat`, …)  |
+| `{parameters}`    | `model_parameters(model)` | Similar to `tidy()` but with richer metadata and more model classes covered      |
+| `{broom.helpers}` | `tidy_plus_plus(model)`   | `tidy()` output **plus** reference rows, labels, contrasts, term grouping        |
+| `{cardx}`         | `ard_regression(model)`   | `tidy_plus_plus()` output cast into the ARD schema you already know              |
+
+```
+   +-----------+   tidy()         +-------------+
+   |   model   |  -------------->  |  flat tibble |   (broom)
+   +-----------+                   +-------------+
+        |                                 |
+        | glance()                        | tidy_plus_plus()
+        v                                 v   (broom.helpers)
+   +-------------+                   +-----------------+
+   |  one-row    |                   |  flat tibble +  |
+   |  fit stats  |                   |  reference rows |
+   +-------------+                   |  + var labels   |
+                                     +-----------------+
+                                             |
+                                             | ard_regression() (cardx)
+                                             v
+                                     +-----------------+
+                                     |   ARD rows      |
+                                     |   (cards shape) |
+                                     +-----------------+
+```
+
+> **SAS analog:** `tidy()` is `ODS OUTPUT ParameterEstimates`. `glance()` is `ODS OUTPUT FitStatistics`/`ModelInfo`. `augment()` is `OUTPUT OUT=` adding `_PREDICTED_`, `_RESIDUAL_`, etc. `broom.helpers` is the SAS programmer's "add a header row for the reference level so the table reads cleanly" macro. `ard_regression()` is the formal ARD wrapper around that macro.
+
+---
+
+### 5.4 `broom::tidy()` — The One-Row-Per-Coefficient Workhorse
+
+`tidy()` is the most-used function in the whole ecosystem. It dispatches on the class of the model object and returns a tibble with a standard column vocabulary.
+
+For a `glm`:
+
+```r
+broom::tidy(fit_logistic, conf.int = TRUE, exponentiate = TRUE)
+#> # A tibble: 4 x 7
+#>   term                       estimate std.error statistic p.value conf.low conf.high
+#>   <chr>                         <dbl>     <dbl>     <dbl>   <dbl>    <dbl>     <dbl>
+#> 1 (Intercept)                   ...      ...       ...     ...      ...       ...
+#> 2 TRT01AXanomeline High Dose    ...      ...       ...     ...      ...       ...
+#> 3 TRT01AXanomeline Low Dose     ...      ...       ...     ...      ...       ...
+#> 4 AGE                           ...      ...       ...     ...      ...       ...
+```
+
+The important arguments:
+
+| Argument        | What it does                                                                      |
+|-----------------|-----------------------------------------------------------------------------------|
+| `conf.int`      | If `TRUE`, add `conf.low`/`conf.high` columns. Default `FALSE`.                   |
+| `conf.level`    | Confidence level for the CI. Default `0.95`.                                      |
+| `exponentiate`  | If `TRUE`, exponentiate `estimate` and CI bounds. For logistic → OR; Cox → HR.    |
+| `effects`       | For mixed models: `"fixed"`, `"random"`, or `"ran_pars"` selects which terms.     |
+
+#### 5.4.1 Why `exponentiate = TRUE` exists
+
+Most modeling functions in R return coefficients on the **link scale**, not the response scale:
+
+- `glm(family = binomial)` returns log-odds. Exponentiate → odds ratios.
+- `glm(family = poisson)` returns log-rate. Exponentiate → rate ratios.
+- `coxph()` returns log-hazard. Exponentiate → hazard ratios.
+- `lm()` returns the response directly. Do **not** exponentiate; it makes no sense.
+
+The flag belongs on the *tidy* call (or on `ard_regression`), not after the fact. Doing it manually with `exp(estimate)` is a common source of bugs because programmers forget to also exponentiate the CI bounds — and exponentiating *only* the point estimate produces a number that does not match the CI you also print.
+
+> **SAS analog:** `PROC LOGISTIC` automatically prints both "Analysis of Maximum Likelihood Estimates" (log-odds) and "Odds Ratio Estimates" (exponentiated). `PROC PHREG` prints "Analysis of Maximum Likelihood Estimates" and "Hazard Ratios". `PROC REG` prints only the unexponentiated table because the response scale is already meaningful. R puts both behind a single boolean flag.
+
+#### 5.4.2 The naming convention for `term`
+
+The `term` column uses R's internal factor encoding rules:
+
+- Continuous covariates → the variable name (`AGE`, `BMI`).
+- Categorical covariates → `<var><level>` for each non-reference level (`TRT01AXanomeline High Dose`).
+- Interactions → `<term1>:<term2>` (`TRT01AXanomeline High Dose:SEXM`).
+
+That naming is fine for analysis but ugly in a clinical table. Fixing it is the job of `broom.helpers` (section 5.6).
+
+> **SAS analog:** the `Parameter` column of `ODS OUTPUT ParameterEstimates` from `PROC LOGISTIC` uses the same `<varname><level>` convention by default (or the `ClassLevel` column if you ask for `CLASS / PARAM=GLM`).
+
+---
+
+### 5.5 `broom::glance()` — The One-Row-Per-Model Fit Summary
+
+Where `tidy()` returns one row per coefficient, `glance()` returns **exactly one row** per model. The columns vary by model class — that is by design — and contain whatever fit statistics are conventional for that family.
+
+For a `glm`:
+
+```r
+broom::glance(fit_logistic)
+#> # A tibble: 1 x 8
+#>   null.deviance df.null logLik   AIC   BIC deviance df.residual  nobs
+#>           <dbl>   <int>  <dbl> <dbl> <dbl>    <dbl>       <int> <int>
+#> 1          ...     ...    ...   ...   ...      ...         ...   ...
+```
+
+For an `lm`: `r.squared`, `adj.r.squared`, `sigma`, `statistic` (F), `p.value`, `df`, `logLik`, `AIC`, `BIC`, `deviance`, `df.residual`, `nobs`.
+
+For a `coxph`: `n`, `nevent`, `statistic.log`, `p.value.log`, `statistic.sc`, `p.value.sc`, `statistic.wald`, `p.value.wald`, `r.squared`, `concordance`, `AIC`, `BIC`.
+
+`glance()` is what you use to report the **goodness-of-fit footer** of a regression table: "n = 254, deviance = 312.4, AIC = 318.4."
+
+> **SAS analog:** the `ODS OUTPUT FitStatistics=` dataset. In `PROC LOGISTIC` this contains AIC, SC (BIC), -2LogL; in `PROC REG` it contains R-Square, Adj R-Sq; in `PROC PHREG` it contains -2 LOG L, AIC, SBC, plus the three score / Wald / log-likelihood χ² tests. `glance()` collapses those into one named row.
+
+---
+
+### 5.6 `broom::augment()` — Adding Per-Observation Columns
+
+`augment()` is the third of broom's trio. It takes the model and the original data and returns the data with per-observation diagnostics appended:
+
+| Column     | Meaning                                                              |
+|------------|----------------------------------------------------------------------|
+| `.fitted`  | Predicted value (response scale)                                     |
+| `.resid`   | Residual                                                             |
+| `.hat`     | Leverage / hat-value                                                 |
+| `.sigma`   | Estimated standard deviation excluding this observation              |
+| `.cooksd`  | Cook's distance — influence measure                                  |
+| `.std.resid` | Standardized residual                                              |
+
+You will rarely use `augment()` to build an ARD — it produces *per-row* diagnostics, not summary statistics. It belongs more to model diagnostics and plotting workflows. But it is good to know it exists.
+
+> **SAS analog:** the `OUTPUT OUT= dataset PREDICTED= RESIDUAL= COOKSD= H=` statement in `PROC REG`, `PROC GLM`, `PROC LOGISTIC`. Same idea, identical purpose.
+
+---
+
+### 5.7 `parameters::model_parameters()` — The easystats Alternative
+
+`{parameters}` from the **easystats** suite is an alternative to `broom::tidy()`. It covers a wider range of model classes (about 230 vs. broom's ~100), and it returns slightly richer metadata.
+
+```r
+parameters::model_parameters(fit_logistic, exponentiate = TRUE)
+#> # Fixed Effects
+#>
+#> Parameter                  | Odds Ratio |   SE |       95% CI |     z |     p
+#> ----------------------------------------------------------------------------
+#> (Intercept)                |       ...  | ...  | [..., ...]  |  ...  | ...
+#> TRT01A [Xanomeline High..]  |       ...  | ...  | [..., ...]  |  ...  | ...
+```
+
+Notice:
+
+- The print method is opinionated and friendly (it renames `estimate` → `Odds Ratio` when you exponentiate a logistic model).
+- The underlying object is still a data frame — `as.data.frame(model_parameters(fit_logistic))` gives you the flat tibble.
+- Columns are spelled `Parameter`, `Coefficient`, `SE`, `CI_low`, `CI_high`, `z`, `p` rather than `term`, `estimate`, `std.error`, `conf.low`, `conf.high`, `statistic`, `p.value`.
+
+`{cardx}` will happily consume either one — you pass `tidy_fun = broom::tidy` or `tidy_fun = parameters::model_parameters` to `ard_regression()` and it adapts. The default is `broom.helpers::tidy_plus_plus()` (which itself wraps `broom::tidy()`).
+
+| When to prefer `broom::tidy()`             | When to prefer `parameters::model_parameters()`  |
+|--------------------------------------------|--------------------------------------------------|
+| You use the standard model classes (lm, glm, coxph, lme4) | You hit a model class broom does not support |
+| You want fewest dependencies                | You want robust-SE / bootstrap CIs out of the box |
+| You will pass the result to `ard_regression()` | You want a pretty stand-alone print method |
+
+> **SAS analog:** there isn't one for `{parameters}` specifically — the closest equivalent is using `PROC GLIMMIX` with `EMPIRICAL=` for robust SEs, then post-processing the `ODS OUTPUT ParameterEstimates` to rename and format. The cleanliness of `model_parameters()` is what motivated easystats in the first place.
+
+---
+
+### 5.8 `broom.helpers::tidy_plus_plus()` — The Clinical Reporting Layer
+
+`broom.helpers` is the *unsung hero* of clinical R reporting. It sits between `broom::tidy()` and `cardx::ard_regression()` and adds five things that you would otherwise have to add manually for every table:
+
+1. **Variable labels.** If your data frame has `attr(x, "label")` strings (a SAS-style label), `broom.helpers` finds them and puts them on the variable rows.
+2. **Categorical reference rows.** When a `TRT01A` factor has levels `Placebo / Low / High` and `Placebo` is the reference, base `tidy()` simply omits Placebo. `broom.helpers` *adds back* a row with `estimate = 1` (when exponentiated) or `estimate = 0` (when not) and a flag `reference_row = TRUE` so the table can show it as the baseline.
+3. **Term grouping.** It tags every row with the **original variable name** in a column called `variable` — so when you have a factor that produced three terms, you can still group those three terms back under one variable header.
+4. **Contrast labels.** It records what kind of contrast was used (treatment, sum, Helmert, …) so the table knows what to footnote.
+5. **N per term.** It records the per-coefficient sample size, useful for footnotes like "n = 84 in TRT01A=High Dose."
+
+```r
+broom.helpers::tidy_plus_plus(fit_logistic, exponentiate = TRUE, conf.int = TRUE) |>
+  dplyr::select(variable, label, term, reference_row, estimate, conf.low, conf.high, p.value)
+```
+
+You will see one row per *level* of every factor — including the reference level — plus one row per continuous variable. That row count is exactly what a publication-style regression table needs.
+
+> **SAS analog:** the `CLASS / PARAM=REF REF='Placebo'` plus a hand-written DATA step that adds the reference row for display. `broom.helpers` makes that automatic.
+
+---
+
+### 5.9 `cardx::ard_regression()` — The ARD Wrapper
+
+`ard_regression()` is `tidy_plus_plus()` wrapped to emit the **ARD schema** you learned in Chapter 1: `variable`, `variable_level`, `stat_name`, `stat_label`, `stat`, `stat_fmt`, `fmt_fun`, etc.
+
+The advantage over calling `tidy_plus_plus()` directly is that the output now plays in the same `bind_ard()` / `apply_fmt_fun()` / `unlist_ard_columns()` pipeline as every other ARD in your project — no special-case code for regression rows.
+
+```r
+cardx::ard_regression(
+  x            = fit_logistic,
+  exponentiate = TRUE,
+  conf.int     = TRUE
+)
+```
+
+Returns ARD rows where:
+
+- `variable` = the original column name in your data.
+- `variable_level` = the factor level (or `NA` for continuous).
+- `stat_name` ∈ {`estimate`, `std.error`, `statistic`, `p.value`, `conf.low`, `conf.high`, `n_obs`, `n_event`, `reference_row`, `label`, ...}.
+- `stat` is the value (list-column).
+
+The full argument list worth knowing:
+
+| Argument          | Purpose                                                                                  |
+|-------------------|------------------------------------------------------------------------------------------|
+| `x`               | The fitted model object.                                                                 |
+| `tidy_fun`        | Which tidier to use under the hood. Default `broom.helpers::tidy_with_broom_or_parameters`. |
+| `exponentiate`    | Exponentiate point estimates and CI bounds. Passed through to the tidier.                |
+| `conf.int`        | Include confidence intervals.                                                            |
+| `conf.level`      | Confidence level (default `0.95`).                                                       |
+| `add_estimate_to_reference_rows` | If `TRUE`, the reference row gets `1` (exponentiated) or `0` (not).       |
+| `stats_to_remove` | Optional character vector to drop unwanted `stat_name` values from the output.           |
+| `fmt_fun`         | Same nested-list format you learned in Chapter 3.                                        |
+
+#### 5.9.1 `ard_regression_basic()` — when you only want the tidy() rows
+
+Sometimes you do *not* want reference rows, labels, or grouping — for example, when you are building a forest plot programmatically and want one row per non-reference term, no more, no less. `cardx::ard_regression_basic()` skips the `broom.helpers` layer and emits ARD rows that come straight from `broom::tidy()` (or whatever `tidy_fun` you supply).
+
+| Function                  | Adds reference rows? | Adds labels? | Variable grouping? |
+|---------------------------|----------------------|--------------|--------------------|
+| `ard_regression()`        | Yes (by default)     | Yes          | Yes                |
+| `ard_regression_basic()`  | No                   | No           | No (term-level only) |
+
+> **SAS analog:** `ard_regression()` is the formatted "Odds Ratio Estimates" table you see in the PDF; `ard_regression_basic()` is the raw `ODS OUTPUT ParameterEstimates` dataset.
+
+---
+
+### 5.10 Supported Model Families and Their SAS PROC Analogs
+
+The whole point of standardization is that one set of code handles many model types. Here is the comprehensive mapping you will use day-to-day.
+
+| R fit call                                       | Model type                          | Closest SAS PROC                                  |
+|--------------------------------------------------|-------------------------------------|---------------------------------------------------|
+| `lm(y ~ x)`                                      | Linear regression                   | `PROC REG`, `PROC GLM`                            |
+| `glm(y ~ x, family = binomial)`                  | Logistic regression                 | `PROC LOGISTIC`                                   |
+| `glm(y ~ x, family = poisson)`                   | Poisson regression for rates        | `PROC GENMOD DIST=POISSON`                        |
+| `glm(y ~ x, family = quasipoisson)`              | Overdispersed Poisson               | `PROC GENMOD DIST=POISSON SCALE=DEVIANCE`         |
+| `MASS::glm.nb(y ~ x)`                            | Negative binomial regression        | `PROC GENMOD DIST=NEGBIN`                         |
+| `MASS::polr(y ~ x)`                              | Ordinal (proportional-odds) logistic | `PROC LOGISTIC ... / LINK=CLOGIT`                |
+| `nnet::multinom(y ~ x)`                          | Multinomial (nominal) logistic      | `PROC LOGISTIC ... / LINK=GLOGIT`                 |
+| `survival::coxph(Surv(time, event) ~ x)`         | Cox proportional hazards            | `PROC PHREG`                                      |
+| `survival::survreg(Surv(...) ~ x)`               | Parametric survival (AFT)           | `PROC LIFEREG`                                    |
+| `lme4::lmer(y ~ x + (1 | id))`                   | Linear mixed-effects                | `PROC MIXED`                                      |
+| `lme4::glmer(y ~ x + (1 | id), family = binomial)` | Generalized linear mixed-effects | `PROC GLIMMIX`                                    |
+| `nlme::gls(y ~ x, correlation = ...)`            | GLS with correlation structure      | `PROC MIXED REPEATED`                             |
+| `geepack::geeglm(y ~ x, id = id, family = ...)`  | GEE                                 | `PROC GENMOD REPEATED`                            |
+
+Every one of these returns a fitted object that `broom::tidy()` recognises, and therefore that `ard_regression()` handles, with no per-class code on your part.
+
+```
+   fit <- lm(...) | glm(...) | coxph(...) | lmer(...) | polr(...) | ...
+                                |
+                                |  (one call works for all)
+                                v
+                       ard_regression(fit, ...)
+                                |
+                                v
+                          ARD rows (standard schema)
+```
+
+> **SAS analog:** imagine if every modeling PROC's `ODS OUTPUT ParameterEstimates` dataset had identical column names, factor-level labelling, and reference-row handling. That uniformity is what the R tidier ecosystem gives you for free.
+
+#### 5.10.1 Model-class specifics worth knowing
+
+- **`lm`** — the simplest case. No `exponentiate`. CI defaults to Wald and is computed instantly.
+- **`glm`** — `exponentiate = TRUE` is almost always what you want for binomial/Poisson. The default CI is *profile likelihood* (slow for big models but more accurate than Wald near boundaries). Pass `conf.method = "wald"` to force Wald.
+- **`coxph`** — `exponentiate = TRUE` produces hazard ratios. The fitted object also carries the proportional-hazards assumption diagnostics, accessible via `survival::cox.zph()` separately.
+- **`lmer` / `glmer`** — by default `tidy()` returns only fixed effects. Pass `effects = c("fixed", "ran_pars")` to also get random-effect variance components. There is no p-value column from `lmer` itself (a deliberate choice by the lme4 authors); the `{lmerTest}` package adds Satterthwaite-approximated p-values.
+- **`polr`** — gives proportional-odds coefficients. Exponentiate to get cumulative odds ratios.
+- **`multinom`** — produces one set of coefficients per non-reference response level. The `y.level` column distinguishes them.
+
+---
+
+### 5.11 The Reference-Row Convention in Detail
+
+Reference rows are the single most-asked-about feature of `ard_regression()` for SAS programmers, because SAS does *not* add them automatically.
+
+Consider a logistic regression with `TRT01A` as a 3-level factor (`Placebo / Xanomeline Low Dose / Xanomeline High Dose`) and `Placebo` chosen as the reference. The raw `tidy()` output has three rows (`Intercept`, `TRT01AXanomeline High Dose`, `TRT01AXanomeline Low Dose`) — Placebo never appears.
+
+A publication-style regression table needs *four* rows for `TRT01A`:
+
+```
+   TRT01A
+     Placebo                  1.00 (ref)         —
+     Xanomeline Low Dose      1.34 (0.92, 1.95)  0.123
+     Xanomeline High Dose     1.78 (1.21, 2.62)  0.003
+```
+
+That extra "Placebo  1.00 (ref)  —" row is the **reference row**. `ard_regression()` produces it by default. Each reference row in the ARD has:
+
+- `stat_name = "reference_row"`, `stat = TRUE` to flag it.
+- `stat_name = "estimate"`, `stat = 1` (when `exponentiate = TRUE`) or `stat = 0` (when not).
+- `stat_name = "p.value"`, `stat = NA`.
+- `stat_name = "conf.low"`, `stat = NA`, similar for `conf.high`.
+
+The downstream renderer (`gtsummary`, `tfrmt`, your own code) reads `reference_row` and decides how to display it ("1.00 (ref)", "—", whatever your SAP specifies).
+
+To **suppress** reference rows entirely, use `ard_regression_basic()` instead, or pass `add_estimate_to_reference_rows = FALSE` (which keeps the rows but leaves their estimate as `NA`).
+
+> **SAS analog:** in `PROC LOGISTIC` you would `ODS OUTPUT ParameterEstimates=pe;` then write a DATA step that, for each `ClassVar`, finds the reference level and inserts a synthetic row with `Estimate = 0` (or `1` after exponentiation). `broom.helpers` does that for you.
+
+---
+
+### 5.12 Confidence Interval Methods — Wald, Profile, Robust
+
+`conf.int = TRUE` is binary, but the *method* used to compute the CI varies by model class.
+
+| Model        | Default CI method      | When to override                                      |
+|--------------|------------------------|-------------------------------------------------------|
+| `lm`         | Wald (`stats::confint.lm`) | Almost never — Wald is exact for `lm`.            |
+| `glm`        | Profile likelihood     | Override to Wald (`conf.method = "wald"`) for speed on very large models. |
+| `coxph`      | Wald                   | Profile available via `survival::confint.coxph(parm, method = "profile")`. |
+| `lmer`       | Wald                   | `conf.method = "profile"` or `"boot"` for accuracy; both are slow. |
+
+Robust / sandwich SEs (the SAS `EMPIRICAL=` / `COVB(SANDWICH)` analogs) are not enabled by default in any of these. To use them, pre-process the model with `sandwich::vcovHC()` or refit with `{rms}` / `{geepack}`, then pass the robust-vcov result via the `tidy_fun` argument.
+
+> **SAS analog:** `PROC LOGISTIC` defaults to Wald CIs in the "Wald Confidence Limits" column; profile-likelihood CIs require the `CLPARM=PL` option. R reverses that default for `glm`: profile is the default, Wald requires an opt-in.
+
+---
+
+### 5.13 Customizing the Tidier via `tidy_fun`
+
+The escape hatch when defaults are not enough.
+
+```r
+ard_regression(
+  x        = fit_glm_with_clustered_data,
+  tidy_fun = \(fit, ...) broom::tidy(fit, conf.int = TRUE, ...) |>
+                          dplyr::mutate(
+                            std.error = sqrt(diag(sandwich::vcovCL(fit, cluster = ~ subject_id)))
+                          )
+)
+```
+
+Any function that takes a model and returns a tibble with the standard column names (`term`, `estimate`, `std.error`, ...) is a valid `tidy_fun`. This is how you splice in:
+
+- Robust / sandwich SEs (`sandwich::vcovHC` or `vcovCL`).
+- Penalized-model CIs (`rms::lrm` outputs).
+- Bayesian posterior summaries (`broom.mixed::tidy.brmsfit`).
+
+The contract is the column vocabulary. Anything that meets it, works.
+
+---
+
+### 5.14 Formatting Regression ARDs
+
+Identical mechanics to Chapter 3:
+
+```r
+ard_regression(
+  x            = fit_logistic,
+  exponentiate = TRUE,
+  conf.int     = TRUE,
+  fmt_fun      = list(
+    estimate   = 2,    # OR to 2 decimals
+    conf.low   = 2,
+    conf.high  = 2,
+    p.value    = 3     # p-values to 3 decimals
+  )
+) |>
+  apply_fmt_fun()
+```
+
+Or update after the fact:
+
+```r
+ard_reg |>
+  update_ard_fmt_fun(p.value = 4) |>
+  apply_fmt_fun()
+```
+
+The `stat_fmt` column is the formatted string; `stat` remains the unrounded numeric. Layout engines pick whichever they need — typically `stat_fmt` for the rendered cell, `stat` for re-computation or rounding-sensitive QC.
+
+> **SAS analog:** the `FORMAT` statement applied during `PROC REPORT` rendering. ARD separates the unrounded value (`stat`) from the rounded display string (`stat_fmt`) so both are auditable.
+
+---
+
+### 5.15 Stacking Model ARDs with Other ARDs
+
+Because `ard_regression()` returns the standard ARD schema, you can `bind_ard()` it onto descriptive ARDs from `{cards}` and inferential ARDs from `{cardx}`. A typical "demographics + regression" mega-table is one stack:
+
+```r
+ard_descrip <- ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by = TRT01A
+)
+
+ard_model <- ard_regression(
+  x = glm(COMPLFL ~ TRT01A + AGE + SEX, data = adsl_resp, family = binomial),
+  exponentiate = TRUE,
+  conf.int     = TRUE
+)
+
+ard_all <- bind_ard(ard_descrip, ard_model)
+```
+
+`ard_all` is one tall dataset feeding one layout call. The fact that the descriptive `AGE` block and the regression `AGE` row share the same `variable = "AGE"` value is exactly what lets the layout tool merge them visually under one variable heading.
+
+---
+
+### 5.16 Common Pitfalls
+
+A short list, ranked by how often they bite:
+
+| Symptom                                                       | Cause                                                                 | Fix                                                            |
+|---------------------------------------------------------------|----------------------------------------------------------------------|----------------------------------------------------------------|
+| OR / HR look like very small numbers (~ −0.5 to 0.5)           | Forgot `exponentiate = TRUE` — those are log-odds / log-hazards.       | Add `exponentiate = TRUE` to `ard_regression()`.               |
+| CI bounds don't bracket the point estimate after exponentiation | Exponentiated the estimate manually but not the CI.                   | Always pass `exponentiate = TRUE` through `tidy()`/`ard_regression()`. |
+| Reference row missing from the table                          | Used `ard_regression_basic()` instead of `ard_regression()`.          | Use `ard_regression()` unless you specifically want raw rows.   |
+| Wrong baseline level appears as reference                     | R uses the first factor level as reference. Yours is alphabetically last. | `relevel(factor, ref = "Placebo")` before fitting.        |
+| p-values empty for `lmer` fits                                | `lme4` deliberately omits p-values.                                   | Load `{lmerTest}` (`library(lmerTest)` before `lmer()`).        |
+| `glm` CI is slow on a 100k-row dataset                        | Profile likelihood is the default and it refits the model per term.   | Pass `conf.method = "wald"` via `tidy_fun`.                    |
+| Factor level labels show up as `TRT01AXanomeline High Dose`   | Raw `broom::tidy()` does not parse the level out.                     | Use `ard_regression()` (which uses `broom.helpers`) — the `variable_level` column gets the clean level. |
+| Variable labels missing in the rendered table                 | The ADaM column has no `label` attribute.                             | Set it: `attr(adsl$AGE, "label") <- "Age (years)"` before fitting. |
+
+---
+
+## Exercise 5.1 — Tidy a Logistic Regression Manually with `broom::tidy()`
+
+The model `fit_logistic` (response flag `COMPLFL` vs. `TRT01A + AGE`) is pre-fitted in your environment. Use `broom::tidy()` to flatten it into a clean data frame with exponentiated coefficients (Odds Ratios) and 95% confidence intervals.
 
 ```{r ch5-ex1, exercise=TRUE, exercise.lines=10}
 # Tidy the pre-loaded fit_logistic model
@@ -81,20 +571,24 @@ tidy(fit_logistic, conf.int = TRUE, exponentiate = TRUE)
 
 ```{r ch5-ex1-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "conf.low" %in% names(.result), "Excellent! broom::tidy() converted the model to a flat tibble, providing Odds Ratios and Confidence Intervals in standard columns."),
+  pass_if(~ is.data.frame(.result) && "conf.low" %in% names(.result), "Excellent! broom::tidy() converted the model into a flat tibble of one row per coefficient with standard column names (`term`, `estimate`, `std.error`, `statistic`, `p.value`, `conf.low`, `conf.high`)."),
   fail_if(~ TRUE, "Try calling tidy(fit_logistic, conf.int = TRUE, exponentiate = TRUE).")
 )
 ```
 
+> **Read the rows:** `estimate` is the Odds Ratio (because of `exponentiate = TRUE`), `std.error` is on the log-odds scale (not the OR scale — this is the SE used to construct CIs *before* exponentiation, then exponentiated), `statistic` is the Wald z-value, `p.value` is the two-sided p, `conf.low`/`conf.high` are the 95% CI on the OR scale.
+>
+> **SAS check:** these are the same six numbers you would read off "Odds Ratio Estimates" + "Analysis of Maximum Likelihood Estimates" in `PROC LOGISTIC`. If you ran the same data through both, the OR and CI should agree to several decimal places.
+
 ---
 
-## Exercise 5.2 — Generate a Regression ARD using `ard_regression`
+## Exercise 5.2 — Generate a Regression ARD with `cardx::ard_regression()`
 
-Instead of tidying manually and mapping results to an ARD schema, we can pass our model directly to `cardx::ard_regression()`. This will run the tidier, add categorical reference rows, and structure everything as a standard ARD data frame.
+Instead of tidying manually and then mapping the result to an ARD schema by hand, pass the fitted model directly to `cardx::ard_regression()`. The function tidies, adds categorical reference rows, attaches variable labels, and structures everything as a standard ARD.
 
 ```{r ch5-ex2, exercise=TRUE, exercise.lines=12}
 # Convert fit_logistic results to an ARD using ard_regression()
-# Hint: Pass fit_logistic, set exponentiate = TRUE and conf.int = TRUE
+# Hint: pass fit_logistic, set exponentiate = TRUE and conf.int = TRUE
 
 ard_reg_results <- ard_regression(
   x = ___,
@@ -127,10 +621,207 @@ ard_reg_results %>%
 
 ```{r ch5-ex2-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "estimate" %in% .result$stat_name, "Correct! cardx::ard_regression() created a complete, standard ARD representation of the regression model, incorporating reference rows and formatting variables."),
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "estimate" %in% .result$stat_name, "Correct! cardx::ard_regression() created a complete, standard ARD representation of the regression — one variable per heading, reference rows added, and `stat_fmt` populated by `apply_fmt_fun()`."),
   fail_if(~ TRUE, "Check that you specify x = fit_logistic, exponentiate = TRUE, and conf.int = TRUE in ard_regression() and format the output.")
 )
 ```
+
+> **Spot the reference row:** scroll the result and look for `TRT01A` with `Placebo` in `variable_level` — its `estimate` is 1 and `p.value` is `NA`. That is the synthetic reference row that `broom.helpers` added behind the scenes. The SAS equivalent would be a DATA-step `INSERT` you'd have to write yourself after `ODS OUTPUT`.
+
+---
+
+## Exercise 5.3 — Goodness-of-Fit with `broom::glance()`
+
+Where `tidy()` gives one row per coefficient, `glance()` gives exactly one row per model — the fit statistics that belong in a regression-table footer (n, AIC, BIC, deviance, log-likelihood).
+
+```{r ch5-ex3, exercise=TRUE, exercise.lines=8}
+# Get the one-row model summary for fit_logistic.
+# Hint: glance(fit_logistic)
+
+fit_logistic %>%
+  ___()
+```
+
+```{r ch5-ex3-hint-1}
+glance(fit_logistic)
+```
+
+```{r ch5-ex3-solution}
+glance(fit_logistic)
+```
+
+```{r ch5-ex3-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && nrow(.result) == 1 && "AIC" %in% names(.result), "Right — `glance()` always returns exactly one row. For a glm you get AIC, BIC, null.deviance, deviance, df.null, df.residual, logLik, and nobs."),
+  fail_if(~ TRUE, "Call glance(fit_logistic). The result should be a one-row tibble.")
+)
+```
+
+> **SAS analog:** these are the same numbers SAS writes to `ODS OUTPUT FitStatistics=` for `PROC LOGISTIC`: AIC, SC (= BIC), -2 Log L. `glance()` is one tidy row containing all of them; the SAS dataset is a long stacked dataset with one row per statistic — same numbers, different shape.
+
+---
+
+## Exercise 5.4 — Tidy the same model with `parameters::model_parameters()`
+
+`{parameters}` from easystats is an alternative to `{broom}`. It covers more model classes and has slightly different column names. The output is a flat data frame either way — you just have to know which column vocabulary is which.
+
+```{r ch5-ex4, exercise=TRUE, exercise.lines=8}
+# Use parameters::model_parameters() to tidy fit_logistic with exponentiated coefficients.
+# Hint: model_parameters(fit_logistic, exponentiate = TRUE)
+
+fit_logistic %>%
+  ___(exponentiate = ___)
+```
+
+```{r ch5-ex4-hint-1}
+model_parameters(fit_logistic, exponentiate = TRUE)
+```
+
+```{r ch5-ex4-solution}
+model_parameters(fit_logistic, exponentiate = TRUE)
+```
+
+```{r ch5-ex4-check}
+grade_result(
+  pass_if(~ inherits(.result, "data.frame") && "Parameter" %in% names(.result), "Yes — `model_parameters()` returns a data frame whose column names are `Parameter`, `Coefficient` (or `Odds Ratio`), `SE`, `CI_low`, `CI_high`, `z`, `p`. Same numbers, different vocabulary from `broom::tidy()`."),
+  fail_if(~ TRUE, "Call model_parameters(fit_logistic, exponentiate = TRUE).")
+)
+```
+
+> **When to use which:** for the standard model families (`lm`, `glm`, `coxph`, `lme4`) you can pick freely — pass either as `tidy_fun` to `ard_regression()`. For unusual models (`brms`, `rstanarm`, `mmrm`, etc.) `parameters` often supports model classes that `broom` does not.
+
+---
+
+## Exercise 5.5 — Linear Regression (`lm`) — the `PROC REG` Analog
+
+The pre-fitted `fit_lm` is a linear regression of `AGE` on `TRT01A + SEX`. Linear regression returns coefficients on the response scale already — **do not exponentiate**. Generate an ARD with confidence intervals.
+
+```{r ch5-ex5, exercise=TRUE, exercise.lines=12}
+# Build an ARD from the linear model fit_lm.
+# Hint: ard_regression(fit_lm, conf.int = TRUE)  -- no exponentiate for lm.
+
+ard_lm <- ard_regression(
+  x = ___,
+  conf.int = ___
+)
+
+ard_lm %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt)
+```
+
+```{r ch5-ex5-hint-1}
+ard_regression(x = fit_lm, conf.int = TRUE)
+```
+
+```{r ch5-ex5-solution}
+ard_lm <- ard_regression(
+  x = fit_lm,
+  conf.int = TRUE
+)
+ard_lm %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt)
+```
+
+```{r ch5-ex5-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "estimate" %in% .result$stat_name && "conf.low" %in% .result$stat_name, "Perfect — same ARD shape as the logistic case, but the coefficients are on the response scale (age in years per unit predictor). No exponentiation."),
+  fail_if(~ TRUE, "Call ard_regression(x = fit_lm, conf.int = TRUE).")
+)
+```
+
+> **SAS analog:** `PROC REG DATA=adsl; CLASS TRT01A SEX; MODEL AGE = TRT01A SEX / CLB;` or the same model in `PROC GLM`. The "Parameter Estimates" table with the `CLB` option gives you the same numbers `ard_regression()` returns here.
+
+---
+
+## Exercise 5.6 — Cox Proportional Hazards (`coxph`) — the `PROC PHREG` Analog
+
+`fit_cox` is pre-fitted in your environment: `coxph(Surv(AVAL, 1 - CNSR) ~ TRT01A + AGE, data = adtte_os)`. Cox returns coefficients on the **log-hazard** scale, so you want `exponentiate = TRUE` to get Hazard Ratios.
+
+```{r ch5-ex6, exercise=TRUE, exercise.lines=12}
+# Build an ARD from the Cox fit, with HRs and 95% CIs.
+
+ard_cox <- ard_regression(
+  x = ___,
+  exponentiate = ___,
+  conf.int = ___
+)
+
+ard_cox %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt)
+```
+
+```{r ch5-ex6-hint-1}
+ard_regression(x = fit_cox, exponentiate = TRUE, conf.int = TRUE)
+```
+
+```{r ch5-ex6-solution}
+ard_cox <- ard_regression(
+  x = fit_cox,
+  exponentiate = TRUE,
+  conf.int = TRUE
+)
+ard_cox %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt)
+```
+
+```{r ch5-ex6-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "estimate" %in% .result$stat_name, "Great — the same ARD shape works for Cox models. The `estimate` rows now hold Hazard Ratios (because `exponentiate = TRUE`), and `TRT01A` Placebo appears with `estimate = 1` as the reference."),
+  fail_if(~ TRUE, "Call ard_regression(x = fit_cox, exponentiate = TRUE, conf.int = TRUE).")
+)
+```
+
+> **SAS analog:** `PROC PHREG DATA=adtte_os; CLASS TRT01A (REF='Placebo'); MODEL AVAL*CNSR(1) = TRT01A AGE / RL;` — the "Hazard Ratios" table is what `ard_regression()` returns above, including the reference row for Placebo.
+
+---
+
+## Exercise 5.7 — `ard_regression()` vs. `ard_regression_basic()`
+
+`ard_regression_basic()` skips the `broom.helpers` layer: no reference rows, no variable labels, no grouping. Compare the two side by side on the same `fit_logistic` and observe which rows disappear.
+
+```{r ch5-ex7, exercise=TRUE, exercise.lines=12}
+# Build both ARDs from fit_logistic.
+# Hint: ard_regression_basic() takes the same first two arguments.
+
+ard_full  <- ard_regression(x = fit_logistic, exponentiate = TRUE, conf.int = TRUE)
+ard_basic <- ___(x = fit_logistic, exponentiate = TRUE, conf.int = TRUE)
+
+# Compare row counts
+list(
+  rows_full  = nrow(ard_full),
+  rows_basic = nrow(ard_basic)
+)
+```
+
+```{r ch5-ex7-hint-1}
+ard_regression_basic(x = fit_logistic, exponentiate = TRUE, conf.int = TRUE)
+```
+
+```{r ch5-ex7-solution}
+ard_full  <- ard_regression(x = fit_logistic, exponentiate = TRUE, conf.int = TRUE)
+ard_basic <- ard_regression_basic(x = fit_logistic, exponentiate = TRUE, conf.int = TRUE)
+list(
+  rows_full  = nrow(ard_full),
+  rows_basic = nrow(ard_basic)
+)
+```
+
+```{r ch5-ex7-check}
+grade_result(
+  pass_if(~ is.list(.result) && .result$rows_full > .result$rows_basic, "Exactly — the full `ard_regression()` returns more rows because `broom.helpers` adds the reference row for `Placebo` plus label / grouping metadata. `ard_regression_basic()` skips those and gives you only what `broom::tidy()` produced."),
+  fail_if(~ TRUE, "Call ard_regression_basic() with the same arguments and compare nrow() of both ARDs.")
+)
+```
+
+> **When to use the basic form:** building a forest plot programmatically (you want exactly one row per non-reference term), or feeding the ARD into a custom layout where the reference rows would be more noise than signal. For standard tabular display, prefer the full `ard_regression()`.
 
 ---
 
@@ -150,7 +841,7 @@ quiz(
   ),
 
   question(
-    "Which package does `{cardx}` use under the hood to standardize outputs from both `{broom}` and `{parameters}`?",
+    "Which package does `{cardx}` use under the hood to standardize outputs from both `{broom}` and `{parameters}` and to add categorical reference rows?",
     answer("ggplot2"),
     answer("broom.helpers", correct = TRUE),
     answer("dplyr"),
@@ -165,6 +856,87 @@ quiz(
     answer("Pass exp = TRUE"),
     answer("Perform the exponentiation manually after generating the ARD"),
     allow_retry = TRUE
+  ),
+
+  question(
+    "Which `{broom}` function returns exactly one row per model containing fit statistics like AIC, BIC, and deviance?",
+    answer("`tidy()`"),
+    answer("`glance()`", correct = TRUE),
+    answer("`augment()`"),
+    answer("`summary()`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which `{broom}` function appends per-observation diagnostics (`.fitted`, `.resid`, `.hat`, `.cooksd`) to the original data?",
+    answer("`tidy()`"),
+    answer("`glance()`"),
+    answer("`augment()`", correct = TRUE),
+    answer("`model_parameters()`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which SAS PROC is the closest analog to `survival::coxph()`?",
+    answer("`PROC LOGISTIC`"),
+    answer("`PROC LIFETEST`"),
+    answer("`PROC PHREG`", correct = TRUE),
+    answer("`PROC GLM`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which SAS PROC is the closest analog to `glm(..., family = poisson)`?",
+    answer("`PROC LOGISTIC`"),
+    answer("`PROC GENMOD DIST=POISSON`", correct = TRUE),
+    answer("`PROC REG`"),
+    answer("`PROC GLIMMIX`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why should you never exponentiate the `estimate` of an `lm()` fit?",
+    answer("Because `lm()` returns coefficients on the response scale already — exponentiating destroys the interpretation.", correct = TRUE),
+    answer("Because R prevents it with an error."),
+    answer("Because the CIs would no longer match — but the estimate itself would be fine."),
+    answer("There is no reason; you can do it freely."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What is the practical difference between `ard_regression()` and `ard_regression_basic()`?",
+    answer("They are aliases; the output is identical."),
+    answer("The basic version runs `broom::tidy()` only; the full version layers `broom.helpers::tidy_plus_plus()` on top to add reference rows, labels, and term grouping.", correct = TRUE),
+    answer("The basic version is for `lm`, the full version is for `glm`."),
+    answer("The basic version drops the CI columns."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Your logistic model uses a 3-level `TRT01A` factor with `Placebo` as the reference. How many rows for `TRT01A` does `ard_regression()` produce by default?",
+    answer("1 row (just the omnibus test)"),
+    answer("2 rows (the two non-reference levels)"),
+    answer("3 rows — one per level including the reference row", correct = TRUE),
+    answer("0 rows; the reference is dropped entirely"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which argument do you pass to `ard_regression()` if you want to use `parameters::model_parameters()` instead of the default broom-based tidier?",
+    answer("`tidier = parameters::model_parameters`"),
+    answer("`tidy_fun = parameters::model_parameters`", correct = TRUE),
+    answer("`engine = \"parameters\"`"),
+    answer("There is no way; the tidier is hard-coded."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why might `glm()` confidence intervals run slowly on a very large dataset, and what is the fix?",
+    answer("R is single-threaded; there is no fix."),
+    answer("The default CI is profile-likelihood, which refits the model per term. Switch to Wald via `conf.method = \"wald\"` for speed.", correct = TRUE),
+    answer("Profile CIs require an Internet connection."),
+    answer("The slowness is a bug — file an issue."),
+    allow_retry = TRUE
   )
 )
 ```
@@ -173,10 +945,31 @@ quiz(
 
 ## Chapter 5 Summary {.congratulations}
 
-You now understand:
-- The role of **model tidying** in flattening nested statistical objects.
-- How **`{broom}`** (`tidy()`) and **`{parameters}`** (`model_parameters()`) extract model estimates.
-- How **`{broom.helpers}`** standardizes coefficient columns and adds categorical reference rows.
-- How to generate regression ARDs using **`cardx::ard_regression()`**.
+You now know how to:
 
-**Next:** Chapter 6 — Consuming ARD (Rendering tables with `{gtsummary}`)
+- Explain why **model tidying** exists and what it solves — every R modeling package returns a nested list with class-specific slot names; tidying standardizes them into a small flat tibble vocabulary.
+- Read the **anatomy** of a fitted model object — `coefficients`, `vcov`, `residuals`, `family`, `terms` — and where each tidier reaches in to extract.
+- Use the **three broom workhorses**:
+  - `tidy()` → one row per coefficient.
+  - `glance()` → one row per model (fit statistics).
+  - `augment()` → one row per observation (predictions and diagnostics).
+- Use **`parameters::model_parameters()`** as an alternative tidier with broader model coverage and richer print methods.
+- Use **`broom.helpers::tidy_plus_plus()`** to add variable labels, reference rows, term grouping, and contrast metadata — the layer that makes tidy output *clinical-table ready*.
+- Generate ARDs from any fitted model with **`cardx::ard_regression()`**, and understand the difference between it and **`ard_regression_basic()`**.
+- Map every common SAS modeling PROC to its R counterpart and feed the fitted object through `ard_regression()`:
+  - `PROC REG` / `PROC GLM` → `lm()`
+  - `PROC LOGISTIC` → `glm(family = binomial)` / `MASS::polr()` / `nnet::multinom()`
+  - `PROC GENMOD DIST=POISSON` → `glm(family = poisson)` / `MASS::glm.nb()`
+  - `PROC PHREG` → `survival::coxph()`
+  - `PROC LIFEREG` → `survival::survreg()`
+  - `PROC MIXED` → `lme4::lmer()` / `nlme::gls()`
+  - `PROC GLIMMIX` → `lme4::glmer()`
+  - `PROC GENMOD REPEATED` → `geepack::geeglm()`
+- Choose **`exponentiate = TRUE`** correctly: yes for logistic/Poisson/Cox, no for linear regression.
+- Recognize and add **reference rows** so categorical factors display "Placebo  1.00 (ref)" alongside the non-reference levels.
+- Pick the right **CI method** (Wald vs. profile likelihood vs. robust), and pass a custom **`tidy_fun`** when defaults are not enough.
+- **Format** regression ARDs with the same `fmt_fun` / `apply_fmt_fun()` / `update_ard_fmt_fun()` machinery you learned for descriptive ARDs.
+- **Bind** regression ARDs onto descriptive and inferential ARDs to feed a single end-to-end layout call.
+- Diagnose the **common pitfalls** — forgetting `exponentiate`, missing reference rows, missing variable labels, slow profile CIs, and absent `lme4` p-values.
+
+**Next:** Chapter 6 — Consuming ARD (rendering publication-ready tables with `{gtsummary}::tbl_ard_summary()`).

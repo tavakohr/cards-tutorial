@@ -1,9 +1,9 @@
 ---
 title: "cards & cardx R Packages — Interactive Training"
-subtitle: "Chapter 6: Consuming ARD"
+subtitle: "Chapter 6: Consuming ARD with gtsummary"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.10
+  version: 2.0
 output:
   learnr::tutorial:
     progressive: true
@@ -11,7 +11,7 @@ output:
     css: www/custom.css
 runtime: shiny_prerendered
 description: >
-  Learn how to build formatted tables from pre-calculated ARDs using gtsummary, apply global themes, modify aesthetics, and export clinical tables.
+  Turn pre-calculated ARDs into publication-ready clinical tables with gtsummary. Master tbl_ard_summary(), themes, selectors, formatters, modify_* helpers, table merging, and export to Word, RTF, HTML, and PDF.
 ---
 
 ```{r setup, include=FALSE}
@@ -35,10 +35,11 @@ gradethis_setup()
 # Load datasets
 data("adsl",  package = "pharmaverseadam")
 
-# Add a missing value to test missing replacements
+# Inject a missing AGE so downstream missing-row exercises have something to show
 adsl$AGE[1] <- NA
 
-# Pre-compute an ARD for downstream exercises to save time
+# Pre-compute a demographics ARD used by most downstream exercises so each chunk
+# only has to focus on the presentation layer, not the calculation layer.
 ard_demog_pre <- ard_stack(
   data = adsl,
   ard_continuous(variables = AGE),
@@ -46,36 +47,217 @@ ard_demog_pre <- ard_stack(
   .by = TRT01A,
   .missing = TRUE
 )
+
+# Pre-compute a richer demographics ARD with an "Overall" column so we can
+# demonstrate the `overall = TRUE` argument in tbl_ard_summary().
+ard_demog_overall <- ard_stack(
+  data = adsl,
+  ard_continuous(variables = AGE),
+  ard_categorical(variables = SEX),
+  .by = TRT01A,
+  .missing = TRUE,
+  .overall = TRUE
+)
 ```
 
 ---
 
-## Chapter 6: Consuming ARD
+## Chapter 6: Consuming ARD with gtsummary
 
-### 6.1 Downstream Table Rendering
+### 6.1 The Consumption Layer — Why It Deserves Its Own Chapter
 
-Once you have calculated statistical results and stored them in the standardized ARD format, you can pass them to downstream reporting engines to render the final table. 
+By the end of Chapter 5 you knew how to *produce* every kind of ARD row a clinical table needs: descriptive, inferential, model coefficients. What you did not yet have was a way to *render* those rows into a publication-quality table that a medical writer can drop into a CSR or a manuscript.
 
-- **`{gtsummary}`**: Provides `tbl_ard_summary()`. This function accepts an ARD object and instantly creates a publication-ready clinical summary table. Because all statistics are already calculated, rendering takes milliseconds.
+That rendering job belongs to the **consumption layer**. In the `{cards}` ecosystem, the de-facto consumption layer is **`{gtsummary}`** — a presentation engine that knows how to read the standard ARD schema and turn it into a publication-ready summary table.
+
+```
+                  THE THREE LAYERS, ONE MORE TIME
+
+  +----------+    +--------------+    +--------------+    +----------+
+  |   ADaM   | -> | {cards}      | -> |  ARD object  | -> |gtsummary | -> RTF/DOCX/HTML/PDF
+  +----------+    | {cardx}      |    +--------------+    +----------+
+                  +--------------+         |                   |
+                  CALCULATION             DATA              PRESENTATION
+                  layer (Ch.2-5)         layer (Ch.1)      layer (this chapter)
+```
+
+The split is what makes the whole approach pay off:
+
+- The **calculation layer** is responsible for getting the numbers right. It does not know what font you will use.
+- The **data layer** (the ARD itself) is the standardized hand-off. It does not know whether a reviewer will read it on paper or in HTML.
+- The **presentation layer** is responsible for fonts, decimals, headers, footers, abbreviations, spanning columns, and the export format. It does not know — and does not need to know — how a single statistic was computed.
+
+A SAS programmer has felt all three layers fused together for years inside a single `PROC REPORT` block. The `{cards}` + `{gtsummary}` design takes them apart so each can be written, tested, debugged, and signed off on independently.
+
+> **Why this matters to you, the new R user:** every time you want a different decimal place, a different journal style, or a different export format, you do *not* re-run the calculations. You change the consumption layer only. That is the speed-up.
+
+---
+
+### 6.2 SAS Programmer's Quick Map — `{gtsummary}` vs. SAS Reporting
+
+The mental shift here is smaller than the one in Chapter 1 — most `{gtsummary}` concepts have a recognizable SAS analog.
+
+| SAS Reporting Concept                            | `{gtsummary}` Equivalent                              | Note                                                                                                |
+|--------------------------------------------------|-------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
+| `PROC REPORT` rendering an `ODS OUTPUT` dataset  | `tbl_ard_summary()` rendering an ARD                  | Both consume a pre-calculated dataset; both write only the display.                                  |
+| `PROC TABULATE`                                  | `tbl_ard_summary()` + `modify_spanning_header()`      | The "column×row crosstab with grouped headers" idiom.                                                |
+| `DEFINE … / DISPLAY ...` in `PROC REPORT`        | `modify_header()`                                     | Sets the visible column label.                                                                       |
+| `COLUMN ... ("Treatments" stat_1 stat_2);`       | `modify_spanning_header(c(stat_1, stat_2) ~ "...")`   | Adds a header that spans several columns.                                                            |
+| `COMPUTE BEFORE / AFTER` for group-row labels    | `bold_labels()` + `italicize_levels()`                | Typography of the row label vs. its sub-levels.                                                      |
+| `FORMAT p PVALUE6.3;`                            | `modify_fmt_fun(p.value ~ style_pvalue)`              | Sets the display function for a single statistic.                                                    |
+| `LABEL` statement in DATA step                   | `label =` argument inside `tbl_ard_summary()`         | Pretty row labels for analysis variables.                                                            |
+| Title / Footnote via `TITLE` and `FOOTNOTE`      | `modify_caption()` / `modify_footnote_body()`         | Document-level title and bottom-of-table notes.                                                      |
+| Abbreviation key in CSR table footers            | `modify_abbreviation()`                               | Dedicated helper for the "TRT = Treatment; SE = ..." footer line.                                    |
+| `ODS RTF`, `ODS WORD`, `ODS PDF`                 | `as_flex_table() %>% save_as_docx()` / `as_gt() %>% gt::gtsave()` | Choose the export engine *after* the table content is settled.                                       |
+| `STYLE = {...}` in `PROC REPORT`                 | Themes (`theme_gtsummary_journal()`, `_compact()`)    | Global visual look without touching each `PROC REPORT` block.                                        |
+| `PROC FORMAT` with picture formats               | `style_number()`, `style_percent()`, `style_pvalue()` | Reusable formatters with sensible clinical defaults.                                                 |
+| Combining two `PROC REPORT` outputs side by side | `tbl_merge()`                                         | Glue tables left-to-right (e.g., descriptive + p-value column).                                      |
+| Concatenating two reports top to bottom          | `tbl_stack()`                                         | Glue tables top-to-bottom (e.g., demographics + disposition in one display).                         |
+
+**Key mental shift:** in SAS, the rendering and the styling instructions are baked into the same `PROC REPORT` block. In `{gtsummary}`, the rendering is a single function call (`tbl_ard_summary()`) and the styling is *layered on top* with `%>%` pipes. The presentation grows declaratively without rewriting the call that produced it.
+
+---
+
+### 6.3 Anatomy of `tbl_ard_summary()` — Every Argument, One by One
+
+`tbl_ard_summary()` is the central function of this chapter. It takes an ARD and gives back a `tbl_summary`-class object — the same class returned by the classic `{gtsummary}` workflow `tbl_summary()` — so every downstream helper (`modify_*`, `bold_*`, `as_*`) accepts it without modification.
+
+```r
+tbl_ard_summary(
+  cards         = ard_demog,                # the ARD
+  by            = TRT01A,                   # column-splitting variable (no leading dot)
+  include       = c(AGE, SEX),              # which analysis variables to show
+  statistic     = list(AGE ~ "{mean} ({sd})"),
+  type          = list(AGE ~ "continuous"),
+  label         = list(AGE = "Age, years"),
+  missing       = "ifany",
+  missing_text  = "Unknown",
+  missing_stat  = "{N_miss}",
+  overall       = FALSE
+)
+```
+
+Below is what each argument means and how it maps to what you already know.
+
+#### `cards`
+
+The ARD object. Must be a data frame of class `card`, typically produced by `ard_stack()` or `bind_ard()`. This is the single input that carries all the numbers — the rest of the arguments are pure presentation.
+
+> **SAS analog:** the `DATA=` argument of `PROC REPORT`. The pre-calculated dataset feeding the display.
+
+#### `by`
+
+A *single* column name in the ARD that splits the table into columns. `TRT01A` produces one column per treatment arm.
+
+Two gotchas worth tattooing on the back of your hand:
+
+- **No leading dot.** In `ard_stack()` you wrote `.by = TRT01A`; here you write `by = TRT01A`. The dot is only a wrapper convention from the calculation layer.
+- **Single variable only.** If your ARD has `group1` (arm) and `group2` (visit), `by` cannot also stratify by visit — that would require nested headers. The standard workflow is to filter the ARD to a single visit upstream or to use the multi-table helpers in section 6.18.
+
+> **SAS analog:** the `ACROSS` variable in `PROC REPORT`.
+
+#### `include`
+
+A vector of variable names from the ARD that should appear as table rows. Anything else in the ARD is silently dropped from the display. This is how you say *"the ARD has AGE, BMI, SEX, RACE, but I only want AGE and SEX in this particular table."*
+
+> **SAS analog:** the row variables you list in a `COLUMN` statement in `PROC REPORT`.
+
+#### `statistic`
+
+A *list of two-sided formulas* specifying which statistics to show for each variable, using the `{glue}`-style brace syntax. The left side targets variables; the right side is the format string.
+
+```r
+statistic = list(
+  AGE      ~ "{mean} ({sd})",
+  BMIBL    ~ "{median} ({p25}, {p75})",
+  all_categorical() ~ "{n} ({p}%)"
+)
+```
+
+The names inside the braces must match `stat_name` values that already exist in the ARD. `{gtsummary}` reads the `stat_fmt` row for each name and drops it into the cell.
+
+> **SAS analog:** the `COMPUTE` block that constructs `"&MEAN (&SD)"` strings in `PROC REPORT`. The same idea, declarative instead of imperative.
+
+#### `type`
+
+Tells `{gtsummary}` how to interpret each variable when picking defaults: `"continuous"`, `"continuous2"`, `"categorical"`, `"dichotomous"`. The `"continuous2"` shape produces *two rows* per stat (a "Mean (SD)" row and a "Median (IQR)" row, for instance).
+
+> **SAS analog:** the `TYPE=` or `ANALYSIS=` distinctions in `PROC TABULATE` that decide whether a row is a numeric summary or a frequency count.
+
+#### `label`
+
+Pretty row labels for analysis variables: `list(AGE = "Age, years", SEX = "Sex")`. These override whatever label was inferred from the ARD's `variable_label` column.
+
+> **SAS analog:** the `LABEL` statement on a SAS dataset variable.
+
+#### `missing`
+
+How missing values are presented. Three values:
+
+| Value         | Meaning                                                              |
+|---------------|----------------------------------------------------------------------|
+| `"no"`        | Do not show a missing row, even if there are missings.                |
+| `"ifany"`     | Show the missing row only when at least one value is missing.         |
+| `"always"`    | Always show the missing row, even when zero values are missing.       |
+
+> **SAS analog:** the `MISSING` option on `PROC FREQ` vs. omitting it. `"always"` matches "include missing categories even when counts are zero."
+
+#### `missing_text`
+
+The visible label for the missing row. Defaults to `"Unknown"` — change it to `"Missing"`, `"Not reported"`, or whatever the SAP requires.
+
+#### `missing_stat`
+
+A `{glue}` template controlling what statistic is shown on the missing row. Default: `"{N_miss}"` (just the count). For a missing-row showing count and percent, use `"{N_miss} ({p_miss}%)"`.
+
+#### `overall`
+
+When `TRUE`, appends a single "Overall" column that pools across all treatment arms. **Requires the ARD to have been built with `ard_stack(.overall = TRUE)`** — `tbl_ard_summary()` cannot pool numbers itself; it can only read rows that the calculation layer already produced.
+
+> **SAS analog:** the "Total" column you add by running the same `PROC SUMMARY` once with `BY TRT01A;` and once without, then combining outputs.
+
+---
+
+### 6.4 The First Table — From ARD to Display in One Call
+
+The cleanest first contact with `tbl_ard_summary()` is to give it nothing but the required arguments and watch it produce a clinical-grade demographics table.
+
+```
+                ard_demog (one tall ARD)
+                          |
+                          | tbl_ard_summary(by, include)
+                          v
+        +-----------------+-----------------+
+        |  Placebo (N=86) |  Xan High (N=84) ...
+   AGE  |   75.2 (8.12)   |   74.4 (7.89)
+   SEX  |
+     F  |   53 (62%)      |   50 (60%)
+     M  |   33 (38%)      |   34 (40%)
+        +-----------------+-----------------+
+
+  Calculation already done. This call only chooses what to show.
+```
+
+Two things worth pausing on:
+
+- The `N=86` / `N=84` in the column headers comes from the `ard_total_n()` rows that `ard_stack()` auto-included. If you build the ARD without total-N rows, the headers will say only the treatment-arm name.
+- The cell content (e.g., `"75.2 (8.12)"`) is *not* recalculated. `{gtsummary}` reads `stat_fmt` for `mean` and `sd` from the ARD and concatenates them according to the `statistic` formula's brace string.
 
 ---
 
 ## Exercise 6.1 — Render a Demographics Table from an ARD
 
-Before we run the exercise, let's exhaustively review the parameters of `tbl_ard_summary()`:
-- `cards`: An ARD object of class `card` (typically created with `ard_stack()`).
-- `by`: A single column to stratify the summary statistics by (Note: NO leading dot, unlike `ard_stack()`).
-- `include`: Variables to include in the summary table (e.g., `c(AGE, SEX)`).
-- `statistic`: A formula specifying the summary statistics for each variable.
-- `type`: Specifies the summary type (`"continuous"`, `"continuous2"`, `"categorical"`, `"dichotomous"`).
-- `label`: Overrides default labels in the summary table (e.g., `list(AGE = "Age, years")`).
-- `missing`: Dictates if missing values are presented (`"no"`, `"ifany"`, `"always"`).
-- `missing_text`: String indicating text shown on the missing row.
-- `missing_stat`: Statistic to show on the missing row.
-- `overall`: When `TRUE`, appends an overall column (requires `ard_stack(.overall = TRUE)`).
+Walk before you run: produce a working demographics table from `ard_demog`, with treatment arms across the top and AGE / SEX down the side. Show the missing row whether or not anything is missing, and use the default statistics.
+
+The arguments you need are:
+
+- `cards =` the ARD object.
+- `include =` a vector of variable names to show.
+- `by =` the column-splitting variable (single variable, no leading dot).
+- `missing = "always"` so the missing row appears unconditionally.
 
 ```{r ch6-ex1, exercise=TRUE, exercise.lines=20}
-# 1. Generate the ARD data frame
+# 1. Build the ARD (descriptive only — no inference yet)
 ard_demog <- ard_stack(
   data = adsl,
   ard_continuous(variables = AGE),
@@ -84,9 +266,9 @@ ard_demog <- ard_stack(
   .missing = TRUE
 )
 
-# 2. Render the table using the pre-computed ARD
-# Hint: call tbl_ard_summary() passing card = ard_demog, include = c(AGE, SEX), by = TRT01A, missing = "always"
-
+# 2. Render the table from the ARD.
+# Hint: call tbl_ard_summary() with cards = ard_demog, include = c(AGE, SEX),
+#       by = TRT01A, and missing = "always".
 demog_table <- ___(
   cards = ard_demog,
   include = c(AGE, SEX),
@@ -94,7 +276,6 @@ demog_table <- ___(
   missing = "always"
 )
 
-# Render table
 demog_table
 ```
 
@@ -113,28 +294,105 @@ tbl_ard_summary(
 
 ```{r ch6-ex1-check}
 grade_result(
-  pass_if(~ inherits(.result, "gtsummary"), "Fantastic! `{gtsummary}` read the ARD and formatted the table. If you want to change titles or footnotes, you can do so in seconds without recalculating any statistics."),
+  pass_if(~ inherits(.result, "gtsummary"), "Excellent! gtsummary read the ARD and built a publication-ready table. The rendering takes milliseconds because every number was already calculated — you only chose what to show."),
   fail_if(~ TRUE, "Check that you are calling tbl_ard_summary() with cards = ard_demog, include = c(AGE, SEX), by = TRT01A, and missing = \"always\".")
 )
 ```
 
+> **Inspect the headers:** they read "Placebo, N = 86", "Xanomeline Low Dose, N = 84", and so on. Those `N = ...` numbers come from the `ard_total_n()` rows automatically added by `ard_stack(.total_n = TRUE)` — the default. The presentation layer simply picks them up.
+
 ---
 
-## Exercise 6.2 — Apply a Global Theme
+## Exercise 6.2 — Add an Overall Column
 
-Before generating your table, you can set a global theme to adhere to specific journal or organizational standards. 
+A common SAP requirement is a "Total" column showing pooled statistics across treatment arms. Two pieces are needed:
 
-- **`theme_gtsummary_journal()`**: Takes a `journal` argument (e.g., `"jama"`, `"nejm"`, `"lancet"`).
-- **`theme_gtsummary_compact()`**: Reduces font size and cell padding for large tables.
-- **`reset_gtsummary_theme()`**: Clears all themes.
+1. The ARD must be built with `.overall = TRUE` so the pooled rows actually exist (we pre-built `ard_demog_overall` in setup).
+2. `tbl_ard_summary()` must be called with `overall = TRUE` to render those rows.
 
-```{r ch6-ex2, exercise=TRUE, exercise.lines=15}
-# Set the global theme to "jama" (Journal of the American Medical Association)
-# Hint: Call theme_gtsummary_journal(journal = "jama")
+Render the same demographics table as Exercise 6.1, but with a pooled overall column. The pre-built ARD is named `ard_demog_overall`.
 
+```{r ch6-ex2-overall, exercise=TRUE, exercise.lines=12}
+# Hint: include `overall = TRUE` and pass the pre-built ard_demog_overall.
+
+tbl_ard_summary(
+  cards = ___,
+  include = c(AGE, SEX),
+  by = TRT01A,
+  overall = ___
+)
+```
+
+```{r ch6-ex2-overall-hint-1}
+# cards = ard_demog_overall, overall = TRUE
+```
+
+```{r ch6-ex2-overall-solution}
+tbl_ard_summary(
+  cards = ard_demog_overall,
+  include = c(AGE, SEX),
+  by = TRT01A,
+  overall = TRUE
+)
+```
+
+```{r ch6-ex2-overall-check}
+grade_result(
+  pass_if(~ inherits(.result, "gtsummary"), "Perfect — the overall column appears alongside the per-arm columns because both sets of rows already exist inside the ARD."),
+  fail_if(~ TRUE, "Set cards = ard_demog_overall and overall = TRUE.")
+)
+```
+
+> **Why it works:** if you forget `.overall = TRUE` at ARD-build time, the pooled rows simply do not exist, and `overall = TRUE` here will have nothing to show. The presentation layer cannot invent numbers — that is the whole point.
+
+---
+
+### 6.5 Themes — Switching the Visual Look Without Touching the Code
+
+Different journals, agencies, and sponsors enforce different style conventions: decimals, percent symbols, italic labels, em dashes for missing, compact spacing. `{gtsummary}` ships with several drop-in themes that re-program the defaults globally for the entire R session.
+
+| Theme function                              | What it changes                                                                                                  |
+|---------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| `theme_gtsummary_journal("jama")`           | JAMA conventions — specific decimals, percent without `%`, et cetera.                                            |
+| `theme_gtsummary_journal("nejm")`           | New England Journal of Medicine conventions.                                                                     |
+| `theme_gtsummary_journal("lancet")`         | The Lancet conventions.                                                                                          |
+| `theme_gtsummary_journal("qjecon")`         | Quarterly Journal of Economics (handy when working on cross-disciplinary submissions).                           |
+| `theme_gtsummary_compact()`                 | Cuts cell padding and font size — useful for long safety tables that would otherwise overflow a portrait page.   |
+| `theme_gtsummary_language("es", ...)`       | Localizes the labels ("Edad" instead of "Age", etc.). Supports `"de"`, `"es"`, `"ja"`, `"zh-CN"`, many more.     |
+| `theme_gtsummary_eda()`                     | Exploratory mode — fewer rounding rules, more precision shown.                                                   |
+| `reset_gtsummary_theme()`                   | Clears all themes and reverts to defaults.                                                                       |
+
+#### 6.5.1 Themes are session-global
+
+The themes are *not* arguments to `tbl_ard_summary()`. They are **side effects** on the R session that persist until another theme is set or `reset_gtsummary_theme()` is called. The recommended pattern is to call the theme function once at the top of a reporting script, render every table in that script, and (if appropriate) reset at the end.
+
+```r
+theme_gtsummary_journal("nejm")
+# ... build many tables here ...
+reset_gtsummary_theme()
+```
+
+> **SAS analog:** `OPTIONS NOFMTERR FORMCHAR='|----|+|---+=|-/\<>*';` at the top of a session, or an `ODS PROCLABEL` setting that applies until changed. Themes carry the same "set once, applies everywhere" mental model.
+
+#### 6.5.2 Stacking compact onto a journal theme
+
+The themes compose. Calling `theme_gtsummary_journal("nejm")` followed by `theme_gtsummary_compact()` gives you NEJM defaults with compact spacing. The later call only overrides the defaults it cares about; the rest of the journal settings remain.
+
+---
+
+## Exercise 6.3 — Apply a Global Theme
+
+Set the global theme to `"jama"` *before* rendering the table. Notice that the same `tbl_ard_summary()` call now produces a different-looking output.
+
+```{r ch6-ex3, exercise=TRUE, exercise.lines=15}
+# 1. Reset any previous theme so the demonstration is clean.
+reset_gtsummary_theme()
+
+# 2. Set the JAMA theme.
+# Hint: theme_gtsummary_journal(journal = "jama")
 ___
 
-# Render the table
+# 3. Render — no other change is needed.
 tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
@@ -142,11 +400,12 @@ tbl_ard_summary(
 )
 ```
 
-```{r ch6-ex2-hint-1}
+```{r ch6-ex3-hint-1}
 # Call theme_gtsummary_journal(journal = "jama") at the top of the block.
 ```
 
-```{r ch6-ex2-solution}
+```{r ch6-ex3-solution}
+reset_gtsummary_theme()
 theme_gtsummary_journal(journal = "jama")
 
 tbl_ard_summary(
@@ -156,64 +415,400 @@ tbl_ard_summary(
 )
 ```
 
-```{r ch6-ex2-check}
+```{r ch6-ex3-check}
 grade_result(
-  pass_if(~ inherits(.result, "gtsummary"), "Great job! Setting a theme changes global aesthetics instantly without touching the underlying statistical data."),
+  pass_if(~ inherits(.result, "gtsummary"), "Great — setting a theme changes the look of every subsequent table globally without touching the ARD or the call."),
   fail_if(~ TRUE, "Ensure you called theme_gtsummary_journal(journal = \"jama\") before rendering.")
 )
 ```
 
----
-
-## Selectors and Helper Functions
-
-`{gtsummary}` and `{cards}` rely heavily on helper functions that "select" parts of the table or format data. If you don't know what these are, the code looks like magic!
-
-### 1. Selectors
-Selectors grab specific columns or rows of the table without you needing to explicitly type out their names:
-- **`all_stat_cols()`**: Automatically selects all columns containing statistical results (e.g., the `stat_1`, `stat_2` columns generated by splitting by `TRT01A`).
-- **`all_continuous()`** / **`all_categorical()`**: Automatically targets all rows/variables that are of the continuous or categorical summary type.
-
-### 2. Formatters
-Formatters are R functions that dictate how numbers are printed as strings:
-- **`style_number`**: A highly versatile `{cards}` function. You can pass it arguments like `digits` to control decimal places (e.g., `style_number(digits = 2)`).
-- **`style_percent`**: Specifically designed for formatting percentages, appending the `%` sign.
+> **Why themes matter:** if your medical writer comes back with "switch every table to NEJM style," that is one line of code, not a search-and-replace across hundreds of `PROC REPORT` definitions. This is the single biggest day-to-day win of the consumption-layer design.
 
 ---
 
-## Exercise 6.3 — Standard Aesthetics
+### 6.6 Selectors — Targeting Columns and Rows Without Hard-Coded Names
 
-The core engine behind all styling in `{gtsummary}` is **`modify_table_styling()`**. It has 15 parameters including `columns`, `rows`, `label`, `hide`, `footnote`, `align`, `missing_symbol`, `fmt_fun`, and `text_interpret`.
+Many `modify_*` helpers expect you to say *which* columns or rows to act on. Hard-coding internal names (`stat_1`, `stat_2`) is fragile — they change as you add or remove treatment arms. `{gtsummary}` ships with a small set of *selectors* that do the targeting for you.
 
-However, `{gtsummary}` provides convenient wrappers for standard typography and headers. Let's practice them:
-- **`modify_header()`**: Modifies column headers.
-- **`modify_spanning_header()`**: Adds headers that group multiple columns together. You can target all statistics using `all_stat_cols()`, or target specific columns using their internal names (e.g. `c(stat_3, stat_4)`).
-- **`bold_labels()`** and **`italicize_levels()`**: Require no arguments, applying globally to row headers.
+#### 6.6.1 Column selectors
 
-```{r ch6-ex3, exercise=TRUE, exercise.lines=18}
+| Selector                | Selects                                                                                       |
+|-------------------------|-----------------------------------------------------------------------------------------------|
+| `all_stat_cols()`       | Every statistic column (`stat_1`, `stat_2`, ...). The "treatment-arm" columns.                |
+| `all_stat_cols(stat_0 = TRUE)` | Same, including the overall column (`stat_0`) when present.                            |
+| `c(stat_3, stat_4)`     | Explicit column names. Useful for targeting "active arms only."                               |
+| `everything()`          | Every column.                                                                                  |
+
+> **SAS analog:** the difference between `_ALL_` (every variable) and listing variable names explicitly. The selectors give you symbolic ways to say "everything that matches a role" instead of "everything by name."
+
+#### 6.6.2 Row / variable selectors
+
+| Selector                  | Selects                                                                                  |
+|---------------------------|------------------------------------------------------------------------------------------|
+| `all_continuous()`        | Every variable typed `"continuous"`.                                                     |
+| `all_continuous2()`       | Every variable typed `"continuous2"`.                                                    |
+| `all_categorical()`       | Every variable typed `"categorical"` *and* `"dichotomous"` (broad default).              |
+| `all_categorical(dichotomous = FALSE)` | Categorical only, excluding dichotomous.                                    |
+| `all_dichotomous()`       | Every variable typed `"dichotomous"`.                                                    |
+
+#### 6.6.3 Why this matters in practice
+
+A formula like
+
+```r
+modify_fmt_fun(all_continuous() ~ style_number)
+```
+
+reads as *"for every continuous variable in the table, apply `style_number` to format its statistics."* The rule is robust to adding more continuous variables later — no edits needed.
+
+> **SAS analog:** writing `FORMAT _NUMERIC_ 5.1;` instead of naming every numeric variable. The selector is the symbolic catch-all.
+
+---
+
+### 6.7 Formatters — Reusable Display Functions for Numbers
+
+A *formatter* is a function that turns a raw number into a string. `{gtsummary}` and `{cards}` ship several with clinical-grade defaults built in. You use them with `fmt_fun` arguments at calculation time (Chapter 3) and with `modify_fmt_fun()` at display time (section 6.13).
+
+| Formatter             | Use for                                          | Key options                                       |
+|-----------------------|--------------------------------------------------|---------------------------------------------------|
+| `style_number()`      | Generic numeric, mean, SD, median                | `digits =`, `big.mark =`                          |
+| `style_percent()`     | Proportions / percentages                         | `digits =`, `symbol =` (append `%` or not)        |
+| `style_pvalue()`      | p-values, with sensible `<0.001` threshold        | `digits =`, `prepend_p = TRUE` to write "p<0.001" |
+| `style_sigfig()`      | Significant figures (handy for hazard ratios)     | `digits =`                                        |
+| `style_ratio()`       | Hazard / odds / risk ratios with "<0.01" handling | `digits =`                                        |
+
+#### 6.7.1 Picking the right formatter
+
+- **Counts (`n`, `N`)** → integer; no formatter needed.
+- **Means, SDs, quartiles** → `style_number(digits = 1)` (means) or `style_number(digits = 2)` (SDs).
+- **Percentages** → `style_percent(digits = 1)`.
+- **p-values** → `style_pvalue(digits = 3)`.
+- **Hazard ratios, odds ratios** → `style_sigfig(digits = 2)` or `style_ratio()` so very small / very large ratios are not displayed misleadingly.
+
+> **SAS analog:** the difference between `PUT(x, 5.1)`, `PUT(x, PERCENT8.1)`, `PUT(x, PVALUE6.3)`, and a custom `PROC FORMAT picture`. The formatters bundle the most common clinical idioms so you do not redefine them per study.
+
+---
+
+### 6.8 `modify_header()` — The Visible Column Labels
+
+`modify_header()` changes the text that appears at the top of one or more columns. Every column has an internal name (`label`, `stat_1`, `stat_2`, `p.value`, ...). You target the internal name and supply the visible string.
+
+```r
+my_table %>%
+  modify_header(
+    label   = "**Characteristic**",      # the row-label column
+    stat_1  = "**Placebo** (N = {n})",   # the first stat column
+    stat_2  = "**Xan Low** (N = {n})",
+    stat_3  = "**Xan High** (N = {n})"
+  )
+```
+
+#### 6.8.1 The `text_interpret` argument
+
+When the new label contains markdown (`**bold**`, `*italic*`, `~~strike~~`), set `text_interpret = "md"` so the engine renders the syntax rather than printing the asterisks. For HTML strings, use `text_interpret = "html"`.
+
+```r
+modify_header(label = "**Demographics**", text_interpret = "md")
+```
+
+> **SAS analog:** the bold + italic settings inside a `DEFINE / DISPLAY` block of `PROC REPORT`. The text_interpret argument plays the role of `STYLE=[FONT_WEIGHT=BOLD]`.
+
+#### 6.8.2 Inline `{glue}` substitutions
+
+You can embed `{n}`, `{N}`, `{p}`, `{N_obs}` placeholders in the header string. They are evaluated *per column* against the ARD's denominator rows. `"**Placebo** (N = {n})"` becomes `"Placebo (N = 86)"` automatically because `{gtsummary}` looks up the `n` for the `Placebo` stratum.
+
+---
+
+### 6.9 `modify_spanning_header()` — Grouped Column Headers
+
+Many CSR tables have two header rows: a top "Treatment Group" line that spans multiple columns, and a bottom line with the individual arm names. That top, spanning line comes from `modify_spanning_header()`.
+
+```r
+my_table %>%
+  modify_spanning_header(all_stat_cols() ~ "**Treatment**")
+```
+
+To span only a subset of the statistic columns — e.g., a "Active Arms" spanner over the two non-Placebo columns:
+
+```r
+my_table %>%
+  modify_spanning_header(c(stat_2, stat_3) ~ "**Active Arms**")
+```
+
+The right-hand side is the visible spanner text; the left-hand side selects which columns it covers.
+
+> **SAS analog:** the nested header syntax in `PROC REPORT`'s `COLUMN` statement: `COLUMN ("Treatment" ("Active" stat_2 stat_3) stat_1);`. Spanning headers are the same idea in a one-line declarative form.
+
+---
+
+### 6.10 `modify_caption()` — Table Title
+
+A table caption is the document-visible title above the table.
+
+```r
+my_table %>%
+  modify_caption("**Table 14.1.1 Demographics, Safety Population**")
+```
+
+The argument accepts markdown when `text_interpret = "md"` is also passed.
+
+> **SAS analog:** the `TITLE2 "..."` statement in `PROC REPORT` or `ODS RTF`.
+
+---
+
+### 6.11 `modify_footnote_body()` and `modify_footnote_header()` — Footnotes
+
+There are two footnote scopes:
+
+| Function                       | Scope                                                              |
+|--------------------------------|--------------------------------------------------------------------|
+| `modify_footnote_body()`       | Adds a footnote to a specific cell or row group inside the body.   |
+| `modify_footnote_header()`     | Adds a footnote anchored to a column header.                       |
+| `modify_source_note()`         | A general "Source:" note appended to the bottom of the table.      |
+| `remove_footnote_*()`          | Removes a footnote previously added.                               |
+
+```r
+my_table %>%
+  modify_footnote_header(
+    "Subjects in the Safety Population.",
+    columns = all_stat_cols()
+  ) %>%
+  modify_footnote_body(
+    "Includes age recorded at randomization.",
+    columns = stat_1,
+    rows = variable == "AGE"
+  )
+```
+
+> **SAS analog:** `FOOTNOTE1`, `FOOTNOTE2` and the cell-level `COMPUTE … CALL DEFINE("_C1_", "style", "url=...");` machinery. `{gtsummary}` separates header- and body-scoped footnotes so they land in the right place automatically.
+
+---
+
+### 6.12 `modify_abbreviation()` — The Abbreviation Footer
+
+Almost every CSR table ends with an *Abbreviations:* footer. `modify_abbreviation()` is a dedicated helper for it — strings you pass are concatenated and rendered with the conventional "Abbreviations:" prefix.
+
+```r
+my_table %>%
+  modify_abbreviation("TRT = Treatment") %>%
+  modify_abbreviation("SD = Standard Deviation") %>%
+  modify_abbreviation("Min = Minimum; Max = Maximum")
+```
+
+The calls compose — each one appends to the footer rather than replacing it. Under the hood it is just a structured `modify_footnote_*()` call with the abbreviation key pre-formatted.
+
+> **SAS analog:** the boilerplate `FOOTNOTE3 "Abbreviations: ...";` line every SAS programmer maintains by hand. `modify_abbreviation()` is the dedicated, type-safe helper for that pattern.
+
+---
+
+### 6.13 `modify_missing_symbol()` — Replace `NA` Blanks
+
+When a cell has no value to show (e.g., the missing row of a variable that has zero missing observations, or the standard-deviation cell of a row with only one subject), the default rendering is a blank or `NA`. Use `modify_missing_symbol()` to swap the blank for an explicit string.
+
+```r
+my_table %>%
+  modify_missing_symbol(
+    columns = all_stat_cols(),
+    symbol  = "—",
+    rows    = !is.na(variable)
+  )
+```
+
+Three arguments worth knowing:
+
+| Argument    | Meaning                                                                                  |
+|-------------|------------------------------------------------------------------------------------------|
+| `columns`   | Which columns to inspect (typically `all_stat_cols()`).                                  |
+| `symbol`    | The visible replacement string (`"—"`, `"NR"`, `"Not Assessed"`).                        |
+| `rows`      | An optional row filter so the substitution only applies where it makes clinical sense.   |
+
+> **SAS analog:** the `MISSING="—"` option on `PROC REPORT` or the `OPTIONS MISSING='-';` global. `modify_missing_symbol()` is the same idea with finer column/row targeting.
+
+---
+
+### 6.14 `modify_fmt_fun()` — Re-Format After Table Generation
+
+You can change the display format of any statistic *after* the table has been built, without touching the underlying ARD. The right-hand side of the formula is a formatter function from section 6.7.
+
+```r
+my_table %>%
+  modify_fmt_fun(
+    all_continuous() ~ style_number,             # all continuous stats
+    all_categorical() ~ style_percent,           # all percentages
+    p.value ~ function(x) style_pvalue(x, digits = 3)
+  )
+```
+
+Three patterns to memorize:
+
+- **One formatter to a whole family of rows** — `all_continuous() ~ style_number`.
+- **A specific statistic** — `p.value ~ style_pvalue` (named formula left-hand side).
+- **A formatter with custom arguments** — wrap it in an anonymous function: `~ function(x) style_number(x, digits = 2)`.
+
+> **SAS analog:** dropping a `FORMAT` statement on the `OUT=` dataset *after* the `PROC` ran and before `PROC REPORT` consumed it. The numbers do not change; the display does.
+
+---
+
+### 6.15 `modify_table_styling()` — The Engine Underneath Every Wrapper
+
+Every `modify_*` wrapper you have seen is convenience around one engine: **`modify_table_styling()`**. Knowing the engine pays off when you want a combination of behaviors that no single wrapper covers, or when you are reading someone else's tightly-packed table code.
+
+#### 6.15.1 The full parameter list
+
+| Parameter                | What it controls                                                              |
+|--------------------------|-------------------------------------------------------------------------------|
+| `columns`                | Which columns to act on. Accepts selectors.                                   |
+| `rows`                   | An expression filtering which rows to act on.                                 |
+| `label`                  | A new visible label for the targeted column.                                  |
+| `spanning_header`        | A spanning header string for the columns.                                     |
+| `hide`                   | `TRUE` / `FALSE` — hide the column from the rendered table.                   |
+| `align`                  | `"left"`, `"center"`, `"right"`.                                              |
+| `footnote_header`        | Footnote anchored to the column header.                                       |
+| `footnote_abbreviation`  | Adds an abbreviation entry into the abbreviation footer.                      |
+| `footnote_spanning_header` | Footnote anchored to the spanning header.                                   |
+| `footnote_body`          | Footnote anchored to body cells.                                              |
+| `fmt_fun`                | Display formatter (one of the `style_*` family).                              |
+| `missing_symbol`         | Replacement for blanks (string).                                              |
+| `cols_merge_pattern`     | Pattern for merging multiple columns into one displayed cell.                 |
+| `text_interpret`         | `"md"` or `"html"` for downstream rendering of the label / footnote.          |
+| `text_format`            | Vector of formats: `"bold"`, `"italic"`, `"indent"`, `"indent2"`, ...         |
+
+Each wrapper sets one or two of these. Calling `modify_table_styling()` directly lets you combine many at once.
+
+#### 6.15.2 An example that needs the engine
+
+Imagine a footnote on a column header *and* a custom alignment *and* a hide flag for a column you do not want visible but still want to keep in the ARD for QC. No single wrapper covers all three:
+
+```r
+my_table %>%
+  modify_table_styling(
+    columns = stat_1,
+    footnote_header = "Placebo arm.",
+    align = "right",
+    hide = FALSE
+  )
+```
+
+> **SAS analog:** writing a `DEFINE / DISPLAY` block with multiple `STYLE=[]` options nested. Wrappers like `modify_header()` are the one-option shortcuts; `modify_table_styling()` is the full `DEFINE` block.
+
+---
+
+### 6.16 Typography Helpers — `bold_labels()`, `italicize_levels()`, and Friends
+
+A handful of zero-argument helpers exist purely for typography:
+
+| Helper                  | Effect                                                       |
+|-------------------------|--------------------------------------------------------------|
+| `bold_labels()`         | Bolds the section labels (the "Age", "Sex" rows).            |
+| `italicize_labels()`    | Italicizes the same section labels.                          |
+| `bold_levels()`         | Bolds the within-variable level rows (e.g., "Male", "Female"). |
+| `italicize_levels()`    | Italicizes the within-variable level rows.                   |
+| `bold_p()`              | Bolds the p-value column when it is below a threshold.       |
+
+`bold_p()` deserves a closer look — it accepts a `t = 0.05` argument and conditionally bolds rows whose p-value is below the threshold. This is the standard "highlight significance" convention from many clinical journals.
+
+```r
+my_table %>% bold_p(t = 0.05)
+```
+
+> **SAS analog:** the `COMPUTE … CALL DEFINE("_VAR_", "style", "style=[font_weight=bold]") IF p < 0.05;` block in `PROC REPORT`. `bold_p()` is the same conditional, one line.
+
+---
+
+### 6.17 Hiding and Reordering Columns
+
+Two tools:
+
+- **`modify_column_hide(columns = stat_2)`** — hide a column from the display while keeping its data in the underlying object.
+- **`modify_column_unhide(columns = stat_2)`** — bring a previously hidden column back.
+
+There is no `modify_column_reorder()` per se; reordering is done by re-stacking the ARD with the desired column order or by passing an explicit `include = c(...)` order at table-construction time. The ARD has no implicit column order — the order you pass `include` is the order the table renders.
+
+> **SAS analog:** the `NOPRINT` option inside a `DEFINE` block of `PROC REPORT`. Hides without removing.
+
+---
+
+### 6.18 Combining Tables — `tbl_merge()` and `tbl_stack()`
+
+Two distinct combining operations exist; mixing them up is one of the most common new-user mistakes.
+
+#### 6.18.1 `tbl_merge()` — side-by-side
+
+Glues tables left-to-right on their row identities. The typical use is to attach a p-value table beside a descriptive table:
+
+```r
+tbl_demog <- tbl_ard_summary(ard_demog_pre,  by = TRT01A, include = c(AGE, SEX))
+tbl_pvals <- tbl_ard_summary(ard_pvals,      by = TRT01A, include = c(AGE, SEX))
+
+tbl_merge(
+  list(tbl_demog, tbl_pvals),
+  tab_spanner = c("**Descriptive**", "**p-value**")
+)
+```
+
+The rows align on `variable` and `variable_level`. Each input table contributes its own set of statistic columns, and the spanners label which side is which.
+
+> **SAS analog:** doing a horizontal `MERGE` of two `ODS OUTPUT` datasets by their `_NAME_` and `_LEVEL_` keys, then feeding the wide result to a single `PROC REPORT`.
+
+#### 6.18.2 `tbl_stack()` — top-to-bottom
+
+Glues tables top-to-bottom. The typical use is to render demographics on top of disposition in a single display, or to stack adverse-event tables across system organ classes.
+
+```r
+tbl_stack(
+  list(tbl_demog, tbl_disposition),
+  group_header = c("**Demographics**", "**Disposition**")
+)
+```
+
+The columns must match across stacked tables; the rows are simply concatenated, with optional bold section headers between them.
+
+> **SAS analog:** running two `PROC REPORT` blocks in a row inside the same `ODS RTF` document. `tbl_stack()` lets you produce the combined output as a single object that exports together.
+
+#### 6.18.3 The decision
+
+```
+                Do the inputs share row identities
+                (same variables, want extra columns)?
+                          /          \
+                        YES           NO
+                         |             |
+                         v             v
+                   tbl_merge()    tbl_stack()
+                   (extra cols)   (extra rows)
+```
+
+---
+
+## Exercise 6.4 — Standard Aesthetics (Bold Labels and Spanning Headers)
+
+Build a table, then apply two layers of styling: bold the row labels, then add a treatment-wide spanning header *and* a narrower spanner over the two active-treatment columns (`stat_3` and `stat_4`).
+
+```{r ch6-ex4, exercise=TRUE, exercise.lines=20}
 tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
   by = TRT01A
 ) %>%
-  # Bold the row labels (AGE, SEX)
+  # 1. Bold the row labels (AGE, SEX section headers).
+  # Hint: bold_labels()
   ___() %>%
-  # 1. Add a spanning header over ALL statistic columns
+  # 2. Add a spanning header over ALL statistic columns.
   # Hint: modify_spanning_header(all_stat_cols() ~ "**All Treatments**")
   ___ %>%
-  # 2. Add a spanning header over ONLY the Xanomeline Active columns (stat_3 and stat_4)
+  # 3. Add a NARROWER spanning header over only the active columns (stat_3, stat_4).
   # Hint: modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**")
   ___
 ```
 
-```{r ch6-ex3-hint-1}
-# Chain the following functions:
+```{r ch6-ex4-hint-1}
+# Chain:
 # bold_labels() %>%
 # modify_spanning_header(all_stat_cols() ~ "**All Treatments**") %>%
 # modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**")
 ```
 
-```{r ch6-ex3-solution}
+```{r ch6-ex4-solution}
 tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
@@ -224,57 +819,53 @@ tbl_ard_summary(
   modify_spanning_header(c(stat_3, stat_4) ~ "**Active Treatments**")
 ```
 
-```{r ch6-ex3-check}
+```{r ch6-ex4-check}
 grade_result(
-  pass_if(~ inherits(.result, "gtsummary"), "Beautiful! Using modifiers is safe and fast because it strictly formats the presentation layer."),
-  fail_if(~ TRUE, "Check that you called bold_labels() and modify_spanning_header().")
+  pass_if(~ inherits(.result, "gtsummary"), "Beautiful — the row labels are bold, every stat column is grouped under 'All Treatments', and the active columns get their own narrower spanner."),
+  fail_if(~ TRUE, "Check that you called bold_labels() and two modify_spanning_header() calls with the right selectors.")
 )
 ```
 
+> **Why this pattern matters:** the second `modify_spanning_header()` does not erase the first — both spanners coexist as two header rows. That declarative composition is much easier to maintain than the nested `COLUMN` syntax of `PROC REPORT`.
+
 ---
 
-## Exercise 6.4 — Advanced Table Styling (Missing, Formatting, and Abbreviations)
+## Exercise 6.5 — Advanced Styling (Header Markdown, Abbreviations, Missing Symbols, Reformatting)
 
-Now let's use the advanced wrapper functions mapping to `modify_table_styling()`. 
+Now layer four advanced modifications onto a table: a markdown header, an abbreviation footer entry, a custom missing symbol, and a re-format of every continuous statistic to two decimals.
 
-- **`modify_abbreviation()`**: A specialized footnote function for defining acronyms in the footer.
-- **`modify_missing_symbol()`**: Replaces `NA` blanks in the table body with a specific character string (`symbol` argument).
-- **`modify_fmt_fun()`**: Updates the formatting function for specific statistics *after* the table is generated.
-- **`text_interpret` parameter**: Instructs `{gtsummary}` to interpret strings as `"md"` (markdown) or `"html"`. Available in all `modify_*` wrappers!
-
-Use these parameters below to heavily customize our table!
-
-```{r ch6-ex4, exercise=TRUE, exercise.lines=25}
+```{r ch6-ex5, exercise=TRUE, exercise.lines=30}
 tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
   by = TRT01A,
   missing = "always"
 ) %>%
-  # 1. Update the header using markdown, setting text_interpret to "md"
+  # 1. Bold "Demographics" header (markdown) on the label column.
   modify_header(
     label = "**Demographics**",
     text_interpret = "md"
   ) %>%
-  # 2. Add an abbreviation to the footer
+  # 2. Add an abbreviation key entry.
   # Hint: modify_abbreviation("TRT = Treatment")
   ___ %>%
-  # 3. Replace the NA missing count blanks with the text "Not Assessed"
+  # 3. Replace blanks in stat columns with "Not Assessed",
+  #    only on non-NA variable rows so the section headers stay clean.
   # Hint: modify_missing_symbol(all_stat_cols(), symbol = "Not Assessed", rows = !is.na(variable))
   ___ %>%
-  # 4. Change the formatting of the continuous statistic to 2 decimal places
+  # 4. Re-format every continuous statistic via style_number.
   # Hint: modify_fmt_fun(all_continuous() ~ style_number)
   ___
 ```
 
-```{r ch6-ex4-hint-1}
+```{r ch6-ex5-hint-1}
 # Chain:
 # modify_abbreviation("TRT = Treatment") %>%
 # modify_missing_symbol(all_stat_cols(), symbol = "Not Assessed", rows = !is.na(variable)) %>%
 # modify_fmt_fun(all_continuous() ~ style_number)
 ```
 
-```{r ch6-ex4-solution}
+```{r ch6-ex5-solution}
 tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
@@ -290,50 +881,254 @@ tbl_ard_summary(
   modify_fmt_fun(all_continuous() ~ style_number)
 ```
 
-```{r ch6-ex4-check}
+```{r ch6-ex5-check}
 grade_result(
-  pass_if(~ inherits(.result, "gtsummary"), "Incredible! You have mastered the advanced styling API of `{gtsummary}`!"),
+  pass_if(~ inherits(.result, "gtsummary"), "Incredible — markdown header, abbreviation footer, missing-symbol substitution, and a global reformat of continuous statistics, all without recomputing a single number."),
   fail_if(~ TRUE, "Ensure you chained modify_abbreviation(), modify_missing_symbol(), and modify_fmt_fun() correctly.")
 )
 ```
 
+> **SAS check:** in SAS the same effect would touch the `PROC REPORT` block, an `OPTIONS MISSING=`, a `FORMAT` statement on the `OUT=` dataset, and a manually-maintained `FOOTNOTE3 "Abbreviations: ...";`. Four files, four edit points. Here it is four pipe-chained lines on one object.
+
 ---
 
-## Exercise 6.5 — Exporting the Table
+### 6.19 The Output Engines — Choose Your Renderer
 
-Clinical tables need to be exported to Microsoft Word, RTF, or PDF. `{gtsummary}` integrates seamlessly with the `{flextable}` package for Word outputs.
+A `gtsummary` object is *not* yet a Word file or an HTML widget. It is an in-memory representation of the table that knows how to convert to any of several rendering backends. You pick the backend by piping into an `as_*()` function.
 
-```{r ch6-ex5, exercise=TRUE, exercise.lines=12}
-# 1. Create the base table
+| Function          | Backend          | Best for                                                                  |
+|-------------------|------------------|---------------------------------------------------------------------------|
+| `as_flex_table()` | `{flextable}`    | Microsoft Word (`.docx`), RTF, PowerPoint, basic HTML.                    |
+| `as_gt()`         | `{gt}`           | High-quality HTML, LaTeX, RTF. Best web rendering.                        |
+| `as_kable()`      | `{knitr}::kable` | Markdown, plain HTML, plain LaTeX. Lightweight, no extra dependencies.    |
+| `as_kable_extra()`| `{kableExtra}`   | Polished LaTeX / PDF with cross-references and conditional row colors.    |
+| `as_huxtable()`   | `{huxtable}`     | Word, Excel, HTML, LaTeX — single object many-target.                     |
+| `as_tibble()`     | base `tibble`    | Data inspection, programmatic post-processing, QC pipelines.              |
+
+#### 6.19.1 The two-step export pattern
+
+Every export looks like:
+
+```
+   gtsummary object
+        |
+        |  as_xxxxx()      <-- step 1: choose backend
+        v
+   flextable / gt / kable / huxtable object
+        |
+        |  save_as_*()     <-- step 2: write to disk
+        v
+   .docx / .html / .pdf / .rtf on disk
+```
+
+For Word:
+
+```r
+my_table %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "table_14_1_1.docx")
+```
+
+For HTML:
+
+```r
+my_table %>%
+  as_gt() %>%
+  gt::gtsave(filename = "table_14_1_1.html")
+```
+
+For LaTeX/PDF:
+
+```r
+my_table %>%
+  as_kable_extra(format = "latex") %>%
+  cat(file = "table_14_1_1.tex")
+```
+
+> **SAS analog:** the choice of `ODS RTF`, `ODS PDF`, `ODS HTML`, `ODS EXCEL` destination. Here the destination choice is made by which `as_*()` you call, and the writer is the corresponding package's `save_as_*()` function.
+
+#### 6.19.2 Picking a backend
+
+- For most pharma submissions, **`as_flex_table()` → `.docx`** is the safe default. Reviewers prefer Word.
+- For a Quarto / RMarkdown HTML appendix, **`as_gt()`** produces the prettiest output and supports cross-references.
+- For a LaTeX-built CSR, **`as_kable_extra()`** is the right call.
+- For a programmatic QC pipeline, **`as_tibble()`** lets you read the table back into a tidy data frame for spot checks.
+
+---
+
+## Exercise 6.6 — Export to Microsoft Word
+
+Convert your demographics table to a `{flextable}` object — the gateway format for `.docx` export. You would chain `flextable::save_as_docx()` at the end in production; here we just render the flextable in the tutorial.
+
+```{r ch6-ex6, exercise=TRUE, exercise.lines=15}
+# 1. Build the base table.
 my_table <- tbl_ard_summary(
   cards = ard_demog_pre,
   include = c(AGE, SEX),
   by = TRT01A
 )
 
-# 2. Convert to flextable
-# Hint: Pipe my_table into as_flex_table()
+# 2. Convert to a flextable.
+# Hint: pipe my_table into as_flex_table().
 flex_out <- ___
 
-# Display the flextable (in practice, you'd pipe this into flextable::save_as_docx())
+# 3. Display (in production: flex_out %>% flextable::save_as_docx(path = "x.docx"))
 flex_out
 ```
 
-```{r ch6-ex5-hint-1}
+```{r ch6-ex6-hint-1}
 # flex_out <- my_table %>% as_flex_table()
 ```
 
-```{r ch6-ex5-solution}
+```{r ch6-ex6-solution}
 flex_out <- my_table %>% as_flex_table()
 flex_out
 ```
 
-```{r ch6-ex5-check}
+```{r ch6-ex6-check}
 grade_result(
-  pass_if(~ inherits(.result, "flextable"), "Success! Converting to a flextable object is the final step before exporting to .docx."),
-  fail_if(~ TRUE, "Ensure you pipe my_table into as_flex_table().")
+  pass_if(~ inherits(.result, "flextable"), "Perfect — the flextable object is what `save_as_docx()` writes to disk. One more pipe call and you have a Word file."),
+  fail_if(~ TRUE, "Pipe my_table into as_flex_table().")
 )
 ```
+
+> **Why flextable?** It is the most faithful Word renderer in R. Borders, merged cells, spanning headers, and footnotes all survive the round-trip into `.docx` and back. The other backends are excellent at HTML and PDF but compromise on edge cases when Word is the target.
+
+---
+
+### 6.20 Inline Reporting with `inline_text()`
+
+A medical writer often wants to drop a single number from a table into the prose of a manuscript: *"The mean age in the placebo arm was {INSERT}."* Hand-typing the number is error-prone — it can drift away from the table during revisions. `inline_text()` looks the number up directly from the table object so it stays in lock-step.
+
+```{r eval=FALSE}
+inline_text(
+  my_table,
+  variable = AGE,
+  column   = stat_1   # the Placebo column
+)
+```
+
+The function returns a character string ready for inline use in RMarkdown / Quarto. In a `.Rmd` source file you would write a line like:
+
+```
+The mean age in the placebo arm was <inline R: inline_text(my_table, variable = AGE, column = stat_1)>.
+```
+
+where `<inline R: ...>` represents the standard backtick-r-...-backtick inline R syntax (omitted here so this tutorial knits cleanly).
+
+When the underlying ARD changes, every inline reference automatically updates the next time the document compiles. No manual hunting for inconsistencies.
+
+> **SAS analog:** the `&MACRO_VAR.` references inside an RTF document built via `DATA _NULL_` and `FILE PRINT;`. `inline_text()` is the same idea, with no manual macro-variable maintenance.
+
+---
+
+### 6.21 Sorting Rows Inside a Section
+
+By default rows appear in the order they were generated in the ARD: continuous variables show their statistics in calculation order; categorical levels show in factor order. To re-sort within a section, the cleanest move is to re-sort the ARD upstream (set factor levels, reorder the `statistic` formula).
+
+For after-the-fact tweaks `{gtsummary}` supports `sort = ` arguments on the higher-level `tbl_summary()` function — `tbl_ard_summary()` honors whatever order is already in the ARD. So if you need a custom level order, fix it at calculation time. The presentation layer is deliberately not in the business of reordering the data.
+
+> **SAS analog:** `PROC FREQ ORDER=FORMATTED` / `ORDER=FREQ` choices live with the calculation; `PROC REPORT` honors the resulting order. Same separation here.
+
+---
+
+### 6.22 Putting It All Together — One Production-Grade Pipeline
+
+The final pattern, end to end, looks like this:
+
+```r
+# Calculation layer (ARD-building)
+ard_demog <- ard_stack(
+  data       = adsl,
+  ard_continuous(variables = c(AGE, BMIBL)),
+  ard_categorical(variables = c(SEX, RACE)),
+  .by        = TRT01A,
+  .total_n   = TRUE,
+  .missing   = TRUE
+)
+
+# Presentation layer (this chapter)
+tbl <- tbl_ard_summary(
+  cards   = ard_demog,
+  include = c(AGE, BMIBL, SEX, RACE),
+  by      = TRT01A,
+  missing = "always"
+) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  modify_caption("**Table 14.1.1 Demographics, Safety Population**") %>%
+  modify_header(label = "**Characteristic**") %>%
+  modify_spanning_header(all_stat_cols() ~ "**Treatment Group**") %>%
+  modify_abbreviation("BMI = Body Mass Index") %>%
+  modify_abbreviation("SD = Standard Deviation") %>%
+  modify_missing_symbol(all_stat_cols(), symbol = "—") %>%
+  modify_fmt_fun(all_continuous() ~ style_number)
+
+# Export layer
+tbl %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "t_14_1_1.docx")
+```
+
+Three layers, three blocks, zero entanglement. Anything you change in one block leaves the others alone.
+
+---
+
+## Exercise 6.7 — End-to-End Production Pipeline
+
+Reproduce the pipeline above in miniature. Build a table from `ard_demog_pre`, bold labels, add a caption, add an abbreviation, add a global missing symbol, and convert to a flextable.
+
+```{r ch6-ex7, exercise=TRUE, exercise.lines=25}
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A,
+  missing = "always"
+) %>%
+  # Bold the row labels.
+  ___() %>%
+  # Add a caption.
+  # Hint: modify_caption("**Table 14.1.1 Demographics**")
+  ___ %>%
+  # Add an abbreviation.
+  ___("SD = Standard Deviation") %>%
+  # Replace missing cell blanks with an em dash.
+  ___(all_stat_cols(), symbol = "—") %>%
+  # Final export step: convert to flextable.
+  ___()
+```
+
+```{r ch6-ex7-hint-1}
+# Chain in order:
+# bold_labels() %>%
+# modify_caption("**Table 14.1.1 Demographics**") %>%
+# modify_abbreviation("SD = Standard Deviation") %>%
+# modify_missing_symbol(all_stat_cols(), symbol = "—") %>%
+# as_flex_table()
+```
+
+```{r ch6-ex7-solution}
+tbl_ard_summary(
+  cards = ard_demog_pre,
+  include = c(AGE, SEX),
+  by = TRT01A,
+  missing = "always"
+) %>%
+  bold_labels() %>%
+  modify_caption("**Table 14.1.1 Demographics**") %>%
+  modify_abbreviation("SD = Standard Deviation") %>%
+  modify_missing_symbol(all_stat_cols(), symbol = "—") %>%
+  as_flex_table()
+```
+
+```{r ch6-ex7-check}
+grade_result(
+  pass_if(~ inherits(.result, "flextable"), "Outstanding — full production pipeline in seven lines. Drop one more `flextable::save_as_docx()` on the end and you have shipped a Word table."),
+  fail_if(~ TRUE, "Check the order of the pipe: bold_labels, modify_caption, modify_abbreviation, modify_missing_symbol, as_flex_table.")
+)
+```
+
+> **The big-picture moment:** every chapter from 1 to 5 was about producing the right ARD. This chapter is about turning that ARD into a deliverable. Same ARD, switch the journal theme: different paper. Switch the export call: different file format. The decoupling is the whole win.
 
 ---
 
@@ -344,7 +1139,34 @@ quiz(
   caption = "Chapter 6 — Check Your Understanding",
 
   question(
-    "Which `{gtsummary}` parameter explicitly replaces `NA` missing values with a string character?",
+    "Which function consumes an ARD and produces a `gtsummary` table object?",
+    answer("ard_stack()"),
+    answer("tbl_ard_summary()", correct = TRUE),
+    answer("modify_table_styling()"),
+    answer("as_flex_table()"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What is the closest SAS analog to `tbl_ard_summary()`?",
+    answer("`PROC TTEST`"),
+    answer("`PROC REPORT` consuming an `ODS OUTPUT` dataset", correct = TRUE),
+    answer("`PROC TRANSPOSE`"),
+    answer("`DATA _NULL_`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why does `tbl_ard_summary()` write `by = TRT01A` instead of `.by = TRT01A`?",
+    answer("They are aliases — both work."),
+    answer("The leading dot is a wrapper convention used only by `ard_stack()` and other wrappers; here `by` is a direct argument with no inner forwarding.", correct = TRUE),
+    answer("Because the table layer does not accept stratification variables."),
+    answer("Because the dot is reserved for internal `{gtsummary}` use."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which `{gtsummary}` argument explicitly substitutes a string for the `NA` cells in the table body?",
     answer("modify_header()"),
     answer("modify_missing_symbol()", correct = TRUE),
     answer("missing_text"),
@@ -353,20 +1175,74 @@ quiz(
   ),
 
   question(
-    "Which argument is used within `modify_header()` to ensure asterisks are rendered as bold text?",
+    "Inside `modify_header()`, which argument lets you write `**bold**` markdown in the new label?",
     answer("label"),
     answer("text_interpret = \"md\"", correct = TRUE),
     answer("fmt_fun"),
     answer("bold_labels()"),
     allow_retry = TRUE
   ),
-  
+
   question(
-    "How do you export a `{gtsummary}` table to Microsoft Word?",
-    answer("Pipe it into write.csv()"),
-    answer("Pipe it into as_flex_table() and use save_as_docx()", correct = TRUE),
-    answer("Use export_word()"),
-    answer("Print it and copy-paste"),
+    "Which selector targets every statistic column (Placebo, Active arms, ...) without naming them individually?",
+    answer("all_continuous()"),
+    answer("all_categorical()"),
+    answer("all_stat_cols()", correct = TRUE),
+    answer("everything()"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "You want to attach a p-value column beside a demographics table that already exists. Which combiner do you use?",
+    answer("`tbl_stack()` — they share columns."),
+    answer("`tbl_merge()` — they share rows and need to be glued left-to-right.", correct = TRUE),
+    answer("`bind_ard()` — that is the only valid combiner."),
+    answer("`rbind()` — base R is sufficient."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which combiner do you use to render demographics on top of disposition in a single table?",
+    answer("`tbl_merge()`"),
+    answer("`tbl_stack()`", correct = TRUE),
+    answer("`bind_ard()`"),
+    answer("`as_flex_table()`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What is the recommended way to export a `gtsummary` table to Microsoft Word?",
+    answer("Pipe it into `write.csv()`."),
+    answer("Pipe it into `as_flex_table()` and then `flextable::save_as_docx()`.", correct = TRUE),
+    answer("Use `export_word()`."),
+    answer("Right-click in the viewer and choose 'Save as'."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which formatter would you use to print a p-value with the `<0.001` threshold and 3 decimal places?",
+    answer("`style_number(digits = 3)`"),
+    answer("`style_pvalue(digits = 3)`", correct = TRUE),
+    answer("`style_percent(digits = 3)`"),
+    answer("`format(round(x, 3))`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "You set `theme_gtsummary_journal(\"jama\")` at the top of your script. What is true about its scope?",
+    answer("It applies only to the very next `tbl_ard_summary()` call."),
+    answer("It applies session-globally to every subsequent gtsummary table until reset.", correct = TRUE),
+    answer("It must be passed as an argument to every modify_*() call."),
+    answer("It edits the ARD in place."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why must `ard_stack(.overall = TRUE)` be set if you want `overall = TRUE` to work in `tbl_ard_summary()`?",
+    answer("Because the presentation layer cannot invent statistics; the pooled rows must already exist in the ARD.", correct = TRUE),
+    answer("Because `tbl_ard_summary()` cannot read non-pooled ARDs at all."),
+    answer("Because the overall column lives in a separate file."),
+    answer("Because `.overall` reformats the table footnotes."),
     allow_retry = TRUE
   )
 )
@@ -377,10 +1253,19 @@ quiz(
 ## Chapter 6 Summary {.congratulations}
 
 You now know:
-- The advantages of the **Separation of Concerns** paradigm in clinical reporting.
-- The exhaustive parameters of `tbl_ard_summary()` (`missing`, `label`, `statistic`).
-- The low-level `modify_table_styling()` engine and advanced wrappers (`modify_fmt_fun`, `modify_abbreviation`, `modify_missing_symbol`).
-- The usage of `text_interpret = "md"` to process markdown syntaxes.
-- How to export tables using **`as_flex_table()`**.
 
-**Next:** Chapter 7 — Advanced Workflows (Writing custom stats and mapping to CDISC ARS JSON)
+- The three-layer architecture (calculation → ARD → presentation) and why **separating the consumption layer** from the calculation layer is the whole productivity story.
+- The full parameter list of **`tbl_ard_summary()`** — `cards`, `by`, `include`, `statistic`, `type`, `label`, `missing`, `missing_text`, `missing_stat`, `overall` — and the SAS analog for each.
+- How to switch the entire visual look of every table with a single **theme** call (`theme_gtsummary_journal()`, `theme_gtsummary_compact()`, `theme_gtsummary_language()`), and how to revert with `reset_gtsummary_theme()`.
+- The **column selectors** (`all_stat_cols()`, explicit name vectors) and **row/variable selectors** (`all_continuous()`, `all_categorical()`, `all_dichotomous()`) that let you target subsets without hard-coding names.
+- The clinical-grade **formatter family**: `style_number()`, `style_percent()`, `style_pvalue()`, `style_sigfig()`, `style_ratio()` — and when to reach for each.
+- The full set of **`modify_*` wrappers**: `modify_header()`, `modify_spanning_header()`, `modify_caption()`, `modify_footnote_header()`, `modify_footnote_body()`, `modify_abbreviation()`, `modify_missing_symbol()`, `modify_fmt_fun()`, `modify_column_hide()`.
+- The engine underneath them all — **`modify_table_styling()`** — and its fifteen parameters.
+- The **typography helpers** `bold_labels()`, `italicize_levels()`, `bold_levels()`, and the conditional `bold_p()`.
+- How to **combine tables** with `tbl_merge()` (side by side, share rows) and `tbl_stack()` (top to bottom, share columns).
+- The **output engines** `as_flex_table()`, `as_gt()`, `as_kable()`, `as_kable_extra()`, `as_huxtable()`, `as_tibble()` and which one to pick per target format.
+- The two-step **export pattern** — `as_*()` chooses the backend, `save_as_*()` writes the file.
+- How **`inline_text()`** ties a manuscript paragraph back to the table so the prose can never drift from the numbers.
+- The complete **SAS-to-`{gtsummary}` map** (`PROC REPORT` → `tbl_ard_summary()`, `STYLE=` → themes, `FORMAT` → `style_*`, `FOOTNOTE` → `modify_footnote_*()` / `modify_abbreviation()`, `ODS RTF` → `as_flex_table() + save_as_docx()`).
+
+**Next:** Chapter 7 — Microsoft Word output with `{flextable}` and `{officer}` (the styling, paging, and template machinery that turns a flextable into a CSR-grade Word document).

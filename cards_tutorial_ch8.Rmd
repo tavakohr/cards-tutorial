@@ -1,7 +1,9 @@
 ---
 title: "cards & cardx R Packages — Interactive Training"
-subtitle: "Chapter 8: Advanced Workflows"
+subtitle: "Chapter 8: Advanced Workflows — Custom Statistics and CDISC ARS Alignment"
 author: "Hamid Tavakoli, MD, MSc"
+tutorial:
+  version: 1.2
 output:
   learnr::tutorial:
     progressive: true
@@ -9,7 +11,9 @@ output:
     css: www/custom.css
 runtime: shiny_prerendered
 description: >
-  Write custom statistical functions and explore the field-by-field mapping between cards ARDs and CDISC ARS structures.
+  Write your own statistical functions, plug them into the cards ARD machinery,
+  and translate every column of a flat ARD into the CDISC Analysis Results
+  Standard (ARS) JSON schema — with every step mapped to its SAS analog.
 ---
 
 ```{r setup, include=FALSE}
@@ -22,6 +26,7 @@ library(cards)
 library(cardx)
 library(jsonlite)
 library(glue)
+library(tibble)
 
 tutorial_options(
   exercise.timelimit = 60
@@ -30,33 +35,200 @@ gradethis_setup()
 
 # Load datasets
 data("adsl",  package = "pharmaverseadam")
+data("adlb",  package = "pharmaverseadam")
+
+# Pre-computed sample ARD row used by Exercise 8.2
+ard_row_demo <- tibble(
+  group1       = "TRT01A",
+  group1_level = "Placebo",
+  variable     = "AGE",
+  stat_name    = "mean",
+  stat         = list(75.21),
+  stat_fmt     = "75.2"
+)
 ```
 
 ---
 
 ## Chapter 8: Advanced Workflows
 
-### 8.1 Custom Statistics & Standards Alignment
+### 8.1 Why This Chapter Exists — The Last Two Gaps
 
-In clinical programming, we often need to calculate non-standard statistics (like geometric means in PK/PD studies) or audit calculations for regulatory compliance. 
+By the end of Chapter 7 you can take an ADaM dataset, build an ARD from it, layout that ARD as a `{gtsummary}` table, style it through `{flextable}`, and ship it as a regulator-grade Word or RTF deliverable. That is a complete reporting pipeline.
 
-- **Custom Statistics**: You can pass a named list of custom functions to `ard_continuous(statistic = ...)` to calculate anything.
-- **CDISC ARS Alignment**: Because `{cards}` ARD is structured, it maps directly, row-by-row, to the CDISC Analysis Results Standard (ARS) JSON schema's **`OperationResult`** objects, enabling automated regulatory validation and traceability.
+But two needs keep showing up in real clinical projects, and neither is solved by the built-in `{cards}` function family:
+
+1. **The statistic you need is not on the list.** PK/PD studies want geometric means. Biomarker work wants coefficient of variation. Safety wants exposure-adjusted incidence rates. Oncology wants median follow-up via the reverse Kaplan-Meier. None of those are in the default `statistic` argument of `ard_continuous()`.
+2. **The regulator wants the dataset, not the table.** Modern submissions under the CDISC **Analysis Results Standard (ARS)** ask for a machine-readable JSON file that *describes* every analysis result — its operation, its grouping, its population, its raw and formatted values — alongside (or instead of) the rendered PDF. That JSON has a specific schema. Your ARD already has every field the schema needs, but the column names are different and the shape is flat-versus-nested.
+
+This chapter closes both gaps:
+
+```
+   +--------------------------+        +-------------------------+
+   |  YOUR ARD                |        |  TWO ADVANCED USES      |
+   |  - standard schema       |        |                         |
+   |  - n, mean, sd, p, ...   |  -+--> |  (1) Extend it with     |
+   |                          |   |    |      CUSTOM statistics  |
+   +--------------------------+   |    |      (sections 8.3-8.11)|
+                                  |    |                         |
+                                  +--> |  (2) Translate it to    |
+                                       |      CDISC ARS JSON     |
+                                       |      (sections 8.12-8.18)|
+                                       +-------------------------+
+```
+
+You will not need any new external package — `{cards}` already exposes the customization seams, and `{jsonlite}` (which you have used since Chapter 1) does the JSON serialization.
+
+---
+
+### 8.2 SAS Programmer's Quick Map
+
+If you have spent years writing SAS code, the two big ideas in this chapter both have direct analogs.
+
+| SAS concept                                              | `{cards}` / R equivalent                              | Note                                                                   |
+|----------------------------------------------------------|-------------------------------------------------------|------------------------------------------------------------------------|
+| `PROC FCMP` user-defined function                        | An R function passed into `statistic = list(...)`     | Write the math once, register it as a named statistic.                 |
+| `%MACRO geom_mean(var=);`                                | `geom_mean <- function(x) exp(mean(log(x[x>0])))`     | R functions are first-class objects — no `%LET`, no `%LOCAL`.          |
+| `%LET DECIMALS = 1;` then `PUT(x, 5.1)`                  | `fmt_fun = list(VAR = list(stat = 1))`                | The "1" means *1 decimal place*; it travels next to the raw stat.      |
+| `ODS OUTPUT MEANS=means_out;`                            | The ARD itself                                        | The ARD is the standardized "ODS OUTPUT" the regulator can consume.    |
+| `PROC EXPORT ... DBMS=CSV;`                              | `jsonlite::toJSON(ard, auto_unbox = TRUE)`            | One call, one file, one wire format.                                   |
+| Pinnacle 21 / Define-XML for SDTM/ADaM                   | CDISC ARS for *analysis results*                      | Standardizes the *outputs* (numbers) the way Define-XML standardizes the *inputs* (variables). |
+| Re-running the program in a validation environment      | Diffing two ARDs row by row                           | Pure data comparison — no fragile PDF text extraction.                 |
+| `PROC COMPARE base=qc compare=prod;`                     | `dplyr::anti_join(qc_ard, prod_ard, by = key_cols)`   | Same idea, but every ARD has the same key columns by construction.     |
+
+**Key mental shift:** in SAS, an *extension* often means a new macro library wired into a new program; in R the extension is a function you wrote inline and passed by name. There is no macro variable scope to manage, no `%MACRO ... %MEND` block to remember to close.
+
+---
+
+### 8.3 What Is a Custom Statistic, Really?
+
+A statistic, from `{cards}`'s point of view, is a function with one rule: *given a vector of numbers, return a value that can be stored in the `stat` list-column.* That value can be:
+
+- a single number — `mean(x)` returns `length 1` numeric;
+- a vector of numbers — `quantile(x, c(0.25, 0.75))` returns `length 2` numeric;
+- a list with names — useful when the statistic naturally has parts (e.g., CI lower, CI upper).
+
+That is the entire contract. If your R function satisfies it, `{cards}` will compute it for every group, store the result in `stat`, format it using the rule you pass via `fmt_fun`, place the formatted text in `stat_fmt`, and stamp the row with the name you registered.
+
+```
+                       INPUT: x  (a numeric vector for one group)
+                                       |
+                                       v
+                       +-------------------------------+
+                       |  YOUR FUNCTION                |
+                       |    f(x) -> a value            |
+                       +-------------------------------+
+                                       |
+                                       v
+                       +-------------------------------+
+                       |  {cards}                      |
+                       |    stat       = f(x)          |
+                       |    stat_fmt   = fmt(f(x))     |
+                       |    stat_name  = "gmean"       |
+                       |    stat_label = "Geo. Mean"   |
+                       +-------------------------------+
+```
+
+> **SAS analog:** in `PROC FCMP` you write `FUNCTION GMEAN(x); RETURN(...); ENDSUB;` and then call `GMEAN(AGE)` inside a data step. In R it is `geom_mean <- function(x) ...` and then you pass `geom_mean` *by name* — no quoting, no macro-invocation syntax — into the `statistic =` argument.
+
+#### 8.3.1 The minimum viable custom statistic
+
+```r
+geom_mean <- function(x) {
+  exp(mean(log(x[x > 0]), na.rm = TRUE))
+}
+```
+
+Three things to notice for a SAS reader:
+
+- **No declarations of length, type, or label.** R infers all of that from the value the function returns.
+- **`x[x > 0]`** is logical-index subsetting. It is the R equivalent of a SAS data-step `IF x > 0 THEN OUTPUT;`. Geometric mean is undefined for zero/negative values, so we drop them.
+- **`na.rm = TRUE`** tells `mean()` to ignore missing values. In SAS, `MEAN()` does this automatically; in R, you must say so explicitly. This is one of the most common bugs when a SAS programmer first writes R.
+
+That one-liner is now ready to plug into `ard_continuous()`.
+
+---
+
+### 8.4 Plugging a Custom Statistic into `ard_continuous()`
+
+`ard_continuous()` accepts an argument called `statistic` that controls *which* statistics get computed for *which* variables. The shape of that argument is a *nested named list*:
+
+```
+statistic = list(
+  <variable_name> = list(
+    <stat_name_1> = <function_or_existing_name>,
+    <stat_name_2> = <function_or_existing_name>,
+    ...
+  )
+)
+```
+
+The outer key is the variable; the inner keys become `stat_name` in the ARD; the inner values are either:
+
+- a built-in name like `"mean"` or `"sd"`, **or**
+- an R function you wrote (or a `~`-formula expression that returns a value).
+
+A minimal call that computes a geometric mean of `AGE` per treatment arm:
+
+```r
+ard_custom <- ard_continuous(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A,
+  statistic = list(
+    AGE = list(
+      gmean = geom_mean      # <-- this is the named custom slot
+    )
+  ),
+  fmt_fun = list(
+    AGE = list(
+      gmean = 1              # <-- one decimal place in stat_fmt
+    )
+  )
+)
+```
+
+What you get back is a perfectly ordinary ARD — same columns as Chapter 1 — with `stat_name = "gmean"` rows for each treatment arm. Downstream layout code does not need to know it was a custom statistic.
+
+> **SAS analog:** writing `PROC MEANS DATA=adsl; CLASS TRT01A; VAR AGE; OUTPUT OUT=out MEAN=mn GEOMEAN=gm; RUN;`. The geometric mean keyword lives in the statistics list; in `{cards}` your custom slot lives in the `statistic =` list. Identical idea, different syntax.
+
+```
+   +-----------------------------+
+   |  statistic = list(          |
+   |    AGE = list(              |
+   |      n     = "n",      <----+--- built-in
+   |      mean  = "mean",   <----+--- built-in
+   |      gmean = geom_mean <----+--- YOUR function
+   |    )                        |
+   |  )                          |
+   +-----------------------------+
+```
+
+#### 8.4.1 Where each piece ends up in the ARD
+
+| Place in `statistic = list(...)`           | Becomes...                       |
+|--------------------------------------------|----------------------------------|
+| Outer name (`AGE`)                         | The `variable` column.           |
+| Inner name (`gmean`)                       | The `stat_name` column.          |
+| Inner function (`geom_mean`)               | Called once per group; the return value becomes `stat`. |
+| `fmt_fun$AGE$gmean = 1`                    | The formatting rule applied to produce `stat_fmt`. |
+
+Nothing else changes — `group1`, `group1_level`, `variable`, `context`, the list-column behavior — all identical to a default `ard_continuous()` call.
 
 ---
 
 ## Exercise 8.1 — Run a Custom Geometric Mean Statistic
 
-Let's write a simple geometric mean function: `geom_mean = function(x) exp(mean(log(x[x > 0]), na.rm = TRUE))`. We will pass it to `ard_continuous()` to summarize `AGE` grouped by `TRT01A`.
+Write a geometric mean function and pass it to `ard_continuous()` to summarize `AGE` grouped by `TRT01A`. Confirm the resulting ARD has a `gmean` row per treatment arm.
 
-```{r ch8-ex1, exercise=TRUE, exercise.lines=20}
-# 1. Define the geometric mean function
+```{r ch8-ex1, exercise=TRUE, exercise.lines=22}
+# 1. Define the geometric mean function (ignores non-positive and NA values)
 geom_mean <- function(x) {
   exp(mean(log(x[x > 0]), na.rm = TRUE))
 }
 
-# 2. Run ard_continuous using the custom function
-# Hint: Pass your function as a named item inside statistic = list(AGE = list(gmean = ...))
+# 2. Run ard_continuous and register your function under the name "gmean"
+#    Hint: pass it inside statistic = list(AGE = list(gmean = ...))
 
 ard_custom <- ard_continuous(
   data = adsl,
@@ -74,7 +246,7 @@ ard_custom <- ard_continuous(
   )
 )
 
-# Look at the results
+# Look at the result
 ard_custom %>%
   apply_fmt_fun() %>%
   unlist_ard_columns(columns = stat_fmt) %>%
@@ -82,7 +254,7 @@ ard_custom %>%
 ```
 
 ```{r ch8-ex1-hint-1}
-# Set gmean = geom_mean inside statistic
+# Set gmean = geom_mean inside the inner list
 ```
 
 ```{r ch8-ex1-solution}
@@ -113,79 +285,873 @@ ard_custom %>%
 
 ```{r ch8-ex1-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "gmean" %in% .result$stat_name, "Correct! You successfully calculated and formatted a custom statistic. This demonstrates how extensible the `{cards}` package is for non-standard clinical summaries."),
-  fail_if(~ TRUE, "Check that you map gmean = geom_mean inside the nested statistic list and format the output.")
+  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result) && "gmean" %in% .result$stat_name, "Correct. You registered a custom statistic by name, and {cards} treated it identically to a built-in: same schema, same formatting pipeline, same list-column."),
+  fail_if(~ TRUE, "Set gmean = geom_mean inside the nested statistic list, and supply the matching fmt_fun entry.")
 )
 ```
 
+> **Read the output:** the `stat_name` column contains exactly the literal `"gmean"` you typed. That string is the key by which `{gtsummary}` (or any downstream consumer) will find the row when it builds a table. Choose stat names that are short, lowercase, and stable — they become part of your project's API.
+
 ---
 
-## Exercise 8.2 — Map a Flat ARD Row to CDISC ARS JSON
+### 8.5 Multiple Custom Statistics in One Call
 
-Each row in a `{cards}` ARD corresponds to a CDISC ARS `OperationResult` object inside `Analysis.results`. 
+You almost never need *just one* custom statistic. PK summaries typically want at minimum `n`, geometric mean, geometric SD, and the geometric coefficient of variation. All four can be registered in the same `statistic =` list:
 
-Write a simple mapper function that takes a single-row ARD dataframe (or list) and maps its elements to the CDISC ARS JSON list structure:
-- `stat_name` -> `operationId`
-- `group1` -> `groupingId`
-- `group1_level` -> `groupId`
-- `stat` -> `rawValue`
-- `stat_fmt` -> `formattedValue`
+```r
+geom_mean <- function(x)  exp(mean(log(x[x > 0]), na.rm = TRUE))
+geom_sd   <- function(x)  exp(sd(log(x[x > 0]), na.rm = TRUE))
+geom_cv   <- function(x)  sqrt(exp(sd(log(x[x > 0]), na.rm = TRUE)^2) - 1) * 100
 
-```{r ch8-ex2, exercise=TRUE, exercise.lines=20}
-# A single-row ARD dataframe
-ard_row <- tibble(
-  group1 = "TRT01A",
-  group1_level = "Placebo",
-  variable = "AGE",
-  stat_name = "mean",
-  stat = list(75.21),
-  stat_fmt = "75.2"
+ard_pk <- ard_continuous(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A,
+  statistic = list(
+    AGE = list(
+      n      = "n",                # mix built-ins...
+      gmean  = geom_mean,          # ...with custom...
+      gsd    = geom_sd,
+      gcv_pc = geom_cv
+    )
+  ),
+  fmt_fun = list(
+    AGE = list(
+      n      = 0,                  # integer
+      gmean  = 1,                  # 1 decimal
+      gsd    = 2,                  # 2 decimals
+      gcv_pc = function(x) sprintf("%.1f%%", x)   # 1 dp with %
+    )
+  )
+)
+```
+
+Three things worth flagging:
+
+- The inner-list names (`gmean`, `gsd`, `gcv_pc`) are *your choice* and will appear in `stat_name`. Pick conventions and stick with them.
+- `fmt_fun` accepts either an integer (number of decimals) **or** a function that takes a number and returns a formatted string. The `function(x) sprintf("%.1f%%", x)` style is the most flexible; it is the R equivalent of writing a SAS `PROC FORMAT VALUE` rule with a `%` suffix.
+- Built-ins and custom stats coexist in the same list; the ARD output is one block of rows, one row per `(group1_level, variable, stat_name)` triple, no matter where the math came from.
+
+> **SAS analog:** declaring multiple statistics keywords (`MEAN STD MEDIAN P25 P75`) in a single `PROC MEANS`. The `statistic =` list is the long-form, function-aware version of that keyword list.
+
+---
+
+### 8.6 Custom Statistics with Parameters — Closures
+
+Sometimes a statistic has a tunable knob. The 95th percentile is a special case of "the *p*-th percentile". The truncated mean has a trim level. You do not want to write `p95`, `p97_5`, `p99` as three near-identical functions. R lets you write *one* function that *returns* a function — a **closure** — and pass each closure into a different slot.
+
+```r
+make_pctile <- function(p) {
+  function(x) stats::quantile(x, probs = p, na.rm = TRUE, names = FALSE)
+}
+
+ard_pcts <- ard_continuous(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A,
+  statistic = list(
+    AGE = list(
+      p95   = make_pctile(0.95),
+      p97_5 = make_pctile(0.975),
+      p99   = make_pctile(0.99)
+    )
+  ),
+  fmt_fun = list(
+    AGE = list(p95 = 1, p97_5 = 1, p99 = 1)
+  )
+)
+```
+
+`make_pctile(0.95)` returns a *function* that already has `p = 0.95` baked in. `{cards}` calls that returned function with each group's `x` vector. The result is three rows per treatment arm — `p95`, `p97_5`, `p99` — all produced by the same one-line factory.
+
+> **SAS analog:** parameterizing a `%MACRO PCTILE(p=);` and calling `%PCTILE(p=0.95)`, `%PCTILE(p=0.975)`, `%PCTILE(p=0.99)`. The R closure is the lambda-friendly equivalent and lives inside the same expression as the call — no separate `%MEND` cleanup.
+
+---
+
+### 8.7 Returning a Vector vs a Scalar — the List-Column Shape
+
+`stat` is a *list-column*. That means each row of the ARD can hold an R object of any shape inside `stat`. This is by design: a single statistic sometimes naturally has multiple components.
+
+```
+   +----------------------------------------------+
+   |  stat_name  =  "n"                           |
+   |  stat       =  list( 86L )                   |   length-1 integer
+   +----------------------------------------------+
+   |  stat_name  =  "ci"                          |
+   |  stat       =  list( c(70.1, 80.3) )         |   length-2 numeric (lower, upper)
+   +----------------------------------------------+
+   |  stat_name  =  "summary"                     |
+   |  stat       =  list(                         |
+   |     list(mean = 75.21, sd = 8.12, n = 86) )  |   nested named list
+   +----------------------------------------------+
+```
+
+`{cards}` does not enforce a specific shape; it just stores whatever you return. The downstream consumer is responsible for understanding it.
+
+Practical rule for clinical reporting:
+
+- For a **single scalar** statistic (mean, median, p-value), return a single number.
+- For a **pair** that conceptually travels together (CI lower + upper, range min + max), return a `length-2` numeric. Format both with one `fmt_fun` rule, then a layout step joins them as `"(70.1, 80.3)"`.
+- For a **structured** statistic (HR + CI + p, all from one Cox model), prefer returning a *named list* so downstream code can pick by name.
+
+> **SAS analog:** the difference between a `PROC MEANS OUTPUT OUT=` dataset (one column per statistic, scalar each) and a `PROC LIFETEST OUTSURV=` dataset (multiple columns with paired meanings — survival, lower CL, upper CL). The list-column is `{cards}`'s general-purpose container.
+
+---
+
+### 8.8 Custom `stat_label` — Making Tables Readable
+
+`stat_name` is for code; `stat_label` is for humans (Chapter 1, section 1.3). You can override the auto-generated label per statistic via the `stat_label` argument, which mirrors the structure of `statistic =`:
+
+```r
+ard_pk_labeled <- ard_continuous(
+  data       = adsl,
+  variables  = AGE,
+  by         = TRT01A,
+  statistic  = list(AGE = list(gmean = geom_mean, gsd = geom_sd)),
+  fmt_fun    = list(AGE = list(gmean = 1, gsd = 2)),
+  stat_label = list(
+    AGE = list(
+      gmean = "Geometric Mean",
+      gsd   = "Geometric SD"
+    )
+  )
+)
+```
+
+When `{gtsummary}` builds a table, the row label inside the AGE section will read `"Geometric Mean"`, not the raw `"gmean"`. The internal `stat_name = "gmean"` is preserved for code that needs to filter rows.
+
+> **SAS analog:** the difference between a SAS variable name (`GMEAN`) and the `LABEL` you attach for `PROC REPORT` column headers (`"Geometric Mean"`).
+
+---
+
+### 8.9 Custom Formatters — `fmt_fun` in Depth
+
+You have already seen integer formatters (`= 1` meaning "one decimal"). The full `fmt_fun` argument accepts four shapes:
+
+| `fmt_fun` value                                          | Meaning                                                |
+|----------------------------------------------------------|--------------------------------------------------------|
+| an integer `n`                                           | Round to `n` decimal places via `formatC(x, digits = n, format = "f")`. |
+| a function `function(x) ...`                             | Apply that function to the raw `stat` value.           |
+| a `~`-formula like `~ sprintf("%.2f%%", .x * 100)`       | Same idea, formula syntax. `.x` is the placeholder.    |
+| a `cards::label_round()` helper                          | Convenience for typical clinical rounding rules.       |
+
+The function form is the most flexible and is the one you reach for when:
+
+- you need a *percent sign*: `function(x) sprintf("%.1f%%", x * 100)`
+- you need to *truncate small p-values*: `function(x) ifelse(x < 0.001, "<0.001", sprintf("%.3f", x))`
+- you need to *guard against `NaN`*: `function(x) ifelse(is.nan(x), "NE", sprintf("%.2f", x))`
+
+```r
+ard_pretty <- ard_continuous(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A,
+  statistic = list(AGE = list(gmean = geom_mean)),
+  fmt_fun   = list(
+    AGE = list(
+      gmean = function(x) {
+        if (is.na(x) || is.nan(x)) return("NE")    # Not Estimable
+        sprintf("%.2f", x)
+      }
+    )
+  )
+)
+```
+
+Two takeaways:
+
+- A formatter is *the only* place where rounding is allowed. Never round `stat` itself. The raw value must survive in full precision for QC.
+- Formatters can be reused: define `fmt_pct1 <- function(x) sprintf("%.1f%%", x * 100)` once and pass `fmt_pct1` into every percentage slot across every variable.
+
+> **SAS analog:** a custom `PROC FORMAT VALUE` paired with a `PUT()` call. The R formatter is the function-call version; you can reuse it across as many ARDs as you want without re-declaring a format library.
+
+---
+
+### 8.10 Combining Custom and Built-in Statistics
+
+Real PK or biomarker tables mix default statistics (`n`, `mean`, `sd`, `min`, `max`) with custom statistics in one ARD. The pattern is exactly the same nested list you already know:
+
+```r
+ard_pk_full <- ard_continuous(
+  data       = adsl,
+  variables  = AGE,
+  by         = TRT01A,
+  statistic  = list(
+    AGE = list(
+      n      = "n",                       # built-in
+      mean   = "mean",                    # built-in
+      sd     = "sd",                      # built-in
+      gmean  = geom_mean,                 # custom
+      gsd    = geom_sd,                   # custom
+      min    = "min",                     # built-in
+      max    = "max"                      # built-in
+    )
+  ),
+  fmt_fun    = list(
+    AGE = list(n = 0, mean = 1, sd = 2, gmean = 1, gsd = 2, min = 0, max = 0)
+  ),
+  stat_label = list(
+    AGE = list(
+      n     = "n", mean = "Mean", sd = "SD",
+      gmean = "Geo. Mean", gsd = "Geo. SD",
+      min   = "Min", max = "Max"
+    )
+  )
+)
+```
+
+The order of inner list entries controls the row order in the ARD. That, in turn, drives the row order inside the AGE section of any downstream table. You get *layout-level* row ordering "for free" by ordering the `statistic =` list — no separate sort step.
+
+> **SAS analog:** the order of statistics keywords after `PROC MEANS` controls the column order of the resulting wide dataset. Here, because the ARD is long, the order controls *row* order — same idea, transposed.
+
+---
+
+### 8.11 Defensive Patterns — NA, Empty Groups, Edge Cases
+
+Custom functions get called on whatever vector the data happens to produce. That vector can be:
+
+- entirely `NA` (no subjects met the criteria),
+- empty (zero rows),
+- a single value (one subject in a tiny stratum),
+- a vector with non-positive values (problematic for `log()`).
+
+A robust custom statistic anticipates these. The pattern:
+
+```r
+geom_mean_safe <- function(x) {
+  x <- x[!is.na(x)]            # drop NA explicitly
+  x <- x[x > 0]                # drop non-positive (log undefined)
+  if (length(x) == 0) return(NA_real_)     # nothing left -> NA
+  exp(mean(log(x)))
+}
+```
+
+Three guard rails, every one of which has a SAS analog:
+
+- `is.na(x)` filtering → `IF NOT MISSING(x);` in a data step.
+- `x[x > 0]` filtering → `IF x > 0;`.
+- `if (length(x) == 0) return(NA_real_)` → returning a missing in a `PROC FCMP` function when no observations satisfy the criteria.
+
+Returning `NA_real_` (not just `NA`) preserves the numeric type of the `stat` column. The formatter can then translate `NA_real_` to `"NE"` (Not Estimable), which is the standard clinical convention.
+
+---
+
+## Exercise 8.2 — Multiple Custom Statistics with Safe Fallbacks
+
+Build an ARD that reports **n**, the **geometric mean** of `AGE`, and the **geometric coefficient of variation** (`gcv_pc`, in percent) for each treatment arm. Make both custom functions safe against `NA` and non-positive values, returning `NA_real_` when no usable observations remain.
+
+```{r ch8-ex2-pk, exercise=TRUE, exercise.lines=30}
+# Safe geometric mean
+geom_mean_safe <- function(x) {
+  x <- x[!is.na(x)]
+  x <- x[x > 0]
+  if (length(x) == 0) return(NA_real_)
+  exp(mean(log(x)))
+}
+
+# Safe geometric CV (%)
+geom_cv_safe <- function(x) {
+  x <- x[!is.na(x)]
+  x <- x[x > 0]
+  if (length(x) < 2) return(NA_real_)
+  sqrt(exp(stats::sd(log(x))^2) - 1) * 100
+}
+
+# Build the ARD: n, gmean, gcv_pc grouped by TRT01A
+ard_pk <- ard_continuous(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A,
+  statistic = list(
+    AGE = list(
+      n      = "n",
+      gmean  = ___,
+      gcv_pc = ___
+    )
+  ),
+  fmt_fun   = list(
+    AGE = list(n = 0, gmean = 1, gcv_pc = 1)
+  )
 )
 
-# Complete the mapper function
+ard_pk %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(group1_level, variable, stat_name, stat_fmt)
+```
+
+```{r ch8-ex2-pk-hint-1}
+# Pass the function objects by name (no parentheses):
+#   gmean  = geom_mean_safe
+#   gcv_pc = geom_cv_safe
+```
+
+```{r ch8-ex2-pk-solution}
+geom_mean_safe <- function(x) {
+  x <- x[!is.na(x)]
+  x <- x[x > 0]
+  if (length(x) == 0) return(NA_real_)
+  exp(mean(log(x)))
+}
+geom_cv_safe <- function(x) {
+  x <- x[!is.na(x)]
+  x <- x[x > 0]
+  if (length(x) < 2) return(NA_real_)
+  sqrt(exp(stats::sd(log(x))^2) - 1) * 100
+}
+ard_pk <- ard_continuous(
+  data = adsl,
+  variables = AGE,
+  by = TRT01A,
+  statistic = list(
+    AGE = list(
+      n      = "n",
+      gmean  = geom_mean_safe,
+      gcv_pc = geom_cv_safe
+    )
+  ),
+  fmt_fun = list(
+    AGE = list(n = 0, gmean = 1, gcv_pc = 1)
+  )
+)
+ard_pk %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(group1_level, variable, stat_name, stat_fmt)
+```
+
+```{r ch8-ex2-pk-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && all(c("n", "gmean", "gcv_pc") %in% .result$stat_name), "Correct. Three statistics — built-in and custom — coexist in the same ARD with consistent formatting."),
+  fail_if(~ TRUE, "Pass geom_mean_safe and geom_cv_safe by name (no parentheses) into the inner list.")
+)
+```
+
+> **Why the safe versions matter:** the moment you submit an ARD to a regulator, every row is a claim. A custom function that crashes when a group has zero positive values does not produce wrong numbers — but it produces *missing rows*, which downstream layout tools will silently render as blank cells. The defensive pattern guarantees every row exists and contains either a valid number or `NA_real_` → `"NE"`, never silence.
+
+---
+
+### 8.12 CDISC ARS — What It Is and Why It Exists
+
+For two decades, CDISC has been standardizing the *inputs* to clinical reporting: SDTM standardized the raw data, ADaM standardized the analysis-ready data, Define-XML described both. Until recently, the *outputs* — the tables, listings, and figures — were standardized only in their visual layout (e.g., ICH E3 section numbering), never in their data shape.
+
+The **Analysis Results Standard (ARS)** closes that gap. It is a CDISC model that says: *for every reported analysis result, store a machine-readable record of what was computed, on which population, with which grouping, and what the resulting raw and formatted values were.*
+
+```
+   +--------------------------+         +--------------------------+
+   |     PAST                 |         |     NOW (with ARS)       |
+   |  PDF / RTF tables        |   --->  |  PDF / RTF tables        |
+   |  (visually inspected)    |         |        +                 |
+   |                          |         |  ARS JSON dataset        |
+   +--------------------------+         |  (machine-validated)     |
+                                        +--------------------------+
+```
+
+The ARS dataset is a JSON document (or XML, but JSON is the practical default) that mirrors a clinical-trial-report TFL inventory at the data level. A regulator can:
+
+- re-run the math from the raw values stored in the ARS,
+- pool results across studies by joining on the standardized fields,
+- cross-check a PDF cell against the ARS rawValue with one script.
+
+The shape that matters for `{cards}` users is the ARS **`Analysis`** object and its child **`OperationResult`** records. Every row in a flat ARD corresponds to exactly one `OperationResult`.
+
+> **SAS analog:** if Define-XML is the spec for the *input* side, ARS is the same kind of spec for the *output* side. Pinnacle 21 already validates the inputs; ARS lets the same tooling validate the outputs.
+
+---
+
+### 8.13 The ARS Object Hierarchy at a Glance
+
+The ARS model is rich, but for our mapping purposes only four levels matter:
+
+```
+   ReportingEvent
+     |
+     +-- AnalysisOutputs            <-- a "table" or "figure" in the CSR
+            |
+            +-- Analysis            <-- one named analysis within that output
+                   |
+                   +-- AnalysisSet          <-- the population (e.g., Safety Pop)
+                   +-- Grouping             <-- the by-variable (e.g., TRT01A)
+                   +-- Operation            <-- the statistic (e.g., mean)
+                   +-- results              <-- a list of OperationResult
+                              |
+                              +-- OperationResult     <-- ONE ARD ROW
+                                    operationId      ("mean")
+                                    resultGroups[]   (grouping + group ID + raw + formatted)
+                                       groupingId   ("TRT01A")
+                                       groupId      ("Placebo")
+                                    rawValue        (75.21)
+                                    formattedValue  ("75.2")
+```
+
+The crucial line is the last block: **an `OperationResult` is a single ARD row**. The fields are renamed, the shape is nested instead of flat, but the *information content* is identical.
+
+---
+
+### 8.14 The Field-by-Field Mapping
+
+Here is the dictionary that turns any ARD into ARS JSON. Memorize this once and the rest is mechanical.
+
+| ARD column           | ARS field                          | Notes                                                                            |
+|----------------------|------------------------------------|----------------------------------------------------------------------------------|
+| `stat_name`          | `operationId`                      | The programmatic name of the statistic — exactly what ARS calls the `Operation`. |
+| `stat_label`         | `Operation.label` (one level up)   | The human-readable label of the operation.                                        |
+| `group1`             | `resultGroups[i].groupingId`       | The *name* of the stratification variable (e.g., `"TRT01A"`).                    |
+| `group1_level`       | `resultGroups[i].groupId`          | The *value* within that variable (e.g., `"Placebo"`).                            |
+| `group2`, `group3`   | additional entries in `resultGroups[]` | Each strata becomes one element in the array.                                   |
+| `variable`           | `Analysis.analysisVariable` (parent level) | Identifies the variable analyzed; lives on the parent Analysis, not the row.   |
+| `stat`               | `rawValue`                         | The unrounded, full-precision number. Critical for downstream auditability.       |
+| `stat_fmt`           | `formattedValue`                   | The display string that appeared in the PDF cell.                                |
+| `context`            | (loose mapping to Operation type)  | Tells the consumer this row came from `ard_continuous`, `ard_categorical`, etc.   |
+
+```
+   ARD row (flat)                      OperationResult (nested)
+   ----------------------------        --------------------------------------
+   group1        = "TRT01A"            operationId   = "mean"
+   group1_level  = "Placebo"           resultGroups  = [
+   variable      = "AGE"                  { groupingId = "TRT01A",
+   stat_name     = "mean"                   groupId    = "Placebo" }
+   stat          = list(75.21)         ]
+   stat_fmt      = "75.2"              rawValue       = 75.21
+                                       formattedValue = "75.2"
+```
+
+That is the entire schema mismatch: ARD names its keys with R-friendly column names; ARS names them with the controlled vocabulary regulators expect. The values are the same.
+
+> **SAS analog:** the difference between a SAS `ODS OUTPUT` dataset and a CDISC-conformant transport dataset (`.xpt`) generated by `LIBNAME XPORT`. Same data, different naming convention, plus structural metadata. ARS is the JSON-era version of the same idea.
+
+---
+
+### 8.15 Writing a Mapper Function
+
+Given the dictionary above, a mapper is mechanical. Here is the minimal version that takes one ARD row (as a one-row tibble) and returns the equivalent `OperationResult` as an R list — ready for `jsonlite::toJSON()`:
+
+```r
 map_row_to_ars <- function(row) {
   list(
-    operationId = row$stat_name,
+    operationId  = row$stat_name,
     resultGroups = list(
       list(
-        groupingId = row$___,      # group1
-        groupId = row$___          # group1_level
+        groupingId = row$group1,
+        groupId    = row$group1_level
       )
     ),
-    rawValue = row$stat[[1]],
-    formattedValue = row$___       # stat_fmt
+    rawValue       = row$stat[[1]],     # un-list the list-column
+    formattedValue = row$stat_fmt
+  )
+}
+```
+
+Three subtleties to point out for a SAS reader:
+
+- **`row$stat[[1]]`** — `stat` is a list-column, so each cell is itself a list. `[[1]]` extracts the first (and usually only) element. This is the moment the list-column "unwraps" into a plain number.
+- **The nested `list( list(...) )`** is the JSON-array-of-objects pattern. `jsonlite::toJSON()` will turn `list(list(...))` into `[ { ... } ]` — an *array* containing one *object*. ARS expects `resultGroups` to be an array, even when there is only one element.
+- **`auto_unbox = TRUE`** in the eventual `toJSON()` call collapses length-1 vectors into JSON scalars (`75.21` instead of `[75.21]`). Forgetting that flag is the single most common bug when generating ARS-style JSON from R.
+
+---
+
+## Exercise 8.3 — Map a Flat ARD Row to CDISC ARS JSON
+
+Complete the mapper function so it pulls the right ARD column into each ARS field. The input is the `ard_row_demo` tibble pre-loaded in setup (one row, one statistic).
+
+```{r ch8-ex2, exercise=TRUE, exercise.lines=22}
+# A single-row ARD (already loaded as ard_row_demo)
+ard_row <- ard_row_demo
+ard_row
+
+# Complete the mapper
+map_row_to_ars <- function(row) {
+  list(
+    operationId  = row$stat_name,
+    resultGroups = list(
+      list(
+        groupingId = row$___,       # the stratification variable name
+        groupId    = row$___        # the level within that variable
+      )
+    ),
+    rawValue       = row$stat[[1]],
+    formattedValue = row$___        # the display string
   )
 }
 
-# Run mapper
+# Run the mapper
 map_row_to_ars(ard_row)
 ```
 
 ```{r ch8-ex2-hint-1}
-# Map group1 to groupingId, group1_level to groupId, and stat_fmt to formattedValue
+# group1 -> groupingId
+# group1_level -> groupId
+# stat_fmt -> formattedValue
 ```
 
 ```{r ch8-ex2-solution}
 map_row_to_ars <- function(row) {
   list(
-    operationId = row$stat_name,
+    operationId  = row$stat_name,
     resultGroups = list(
       list(
         groupingId = row$group1,
-        groupId = row$group1_level
+        groupId    = row$group1_level
       )
     ),
-    rawValue = row$stat[[1]],
+    rawValue       = row$stat[[1]],
     formattedValue = row$stat_fmt
   )
 }
-map_row_to_ars(ard_row)
+map_row_to_ars(ard_row_demo)
 ```
 
 ```{r ch8-ex2-check}
 grade_result(
-  pass_if(~ .result$operationId == "mean" && .result$resultGroups[[1]]$groupId == "Placebo", "Superb! You mapped the flat ARD row to the CDISC ARS logical schema. This row can now be serialized directly as compliance-conformant JSON for submission!"),
-  fail_if(~ TRUE, "Ensure you are pulling row$group1, row$group1_level, and row$stat_fmt inside the function.")
+  pass_if(~ .result$operationId == "mean" && .result$resultGroups[[1]]$groupId == "Placebo" && .result$formattedValue == "75.2", "Excellent. The flat ARD row is now in ARS-conformant nested shape, ready for jsonlite::toJSON()."),
+  fail_if(~ TRUE, "Make sure you map row$group1 -> groupingId, row$group1_level -> groupId, and row$stat_fmt -> formattedValue.")
+)
+```
+
+---
+
+### 8.16 From a Mapped Row to Valid ARS JSON
+
+Once the mapper returns a per-row list, scaling to a whole ARD is one `lapply()` away, and the final JSON string is one `toJSON()` away:
+
+```r
+# Step 1: map every row of the ARD into an OperationResult list
+op_results <- lapply(split(ard, seq_len(nrow(ard))), map_row_to_ars)
+
+# Step 2: wrap them inside the surrounding Analysis object
+ars_analysis <- list(
+  id                = "AN.DEMOG.AGE.MEAN",
+  label             = "Demographics — Mean AGE by Treatment Arm",
+  analysisVariable  = "AGE",
+  results           = op_results
+)
+
+# Step 3: serialize to a string and write it out
+ars_json <- jsonlite::toJSON(ars_analysis, auto_unbox = TRUE, pretty = TRUE)
+writeLines(ars_json, "ars_demog_age_mean.json")
+```
+
+```
+   +-----------------------------+
+   |  flat ARD (n rows)          |
+   +---------------+-------------+
+                   |
+                   |  lapply(split(ard, row), map_row_to_ars)
+                   v
+   +-----------------------------+
+   |  list of OperationResult    |
+   +---------------+-------------+
+                   |
+                   |  wrap in Analysis object
+                   v
+   +-----------------------------+
+   |  R list (ARS-shaped)        |
+   +---------------+-------------+
+                   |
+                   |  jsonlite::toJSON(auto_unbox = TRUE, pretty = TRUE)
+                   v
+   +-----------------------------+
+   |  ars_demog_age_mean.json    |
+   +-----------------------------+
+```
+
+The output file is what a downstream consumer — a regulator's reviewer, a pooling tool, an automated QC script — will read. Because it is a structured document and not a PDF, every field is addressable: an analyst can ask "what was the mean AGE in the Placebo arm of study X?" and get the answer in one line of code, without parsing any visual layout.
+
+> **SAS analog:** the difference between sending a regulator an RTF file and sending them a `.xpt` SAS transport file. Both contain the same information; only one is machine-validatable. ARS JSON is the modern equivalent — JSON instead of XPT, but the auditability gain is the same.
+
+#### 8.16.1 Round-tripping — ARS back to a data frame
+
+A reviewer who receives the JSON file can rebuild the ARD with two calls:
+
+```r
+ars_in <- jsonlite::read_json("ars_demog_age_mean.json")
+
+ard_rebuilt <- do.call(rbind, lapply(ars_in$results, function(op) {
+  data.frame(
+    group1       = op$resultGroups[[1]]$groupingId,
+    group1_level = op$resultGroups[[1]]$groupId,
+    stat_name    = op$operationId,
+    stat         = unlist(op$rawValue),
+    stat_fmt     = op$formattedValue,
+    stringsAsFactors = FALSE
+  )
+}))
+```
+
+The fact that this round-trip is *symmetric* — ARD goes out, ARS comes back, ARD reappears — is the whole point of having a standard. The numbers cannot drift across the trip.
+
+---
+
+### 8.17 Cross-Study Pooling — Why a Standard Pays Off
+
+If every study in a development program emits an ARS JSON file for every analysis result, pooling becomes trivial:
+
+```r
+ars_study_a <- jsonlite::read_json("studyA/ars_demog.json")
+ars_study_b <- jsonlite::read_json("studyB/ars_demog.json")
+
+# rebuild ARDs from each, tag with study, bind
+ard_pool <- bind_rows(
+  ars_to_ard(ars_study_a) %>% mutate(study = "A"),
+  ars_to_ard(ars_study_b) %>% mutate(study = "B")
+)
+
+ard_pool %>%
+  filter(stat_name == "mean", variable == "AGE") %>%
+  group_by(group1_level) %>%
+  summarise(pooled_mean = weighted.mean(stat, w = n))
+```
+
+The pooling is *just a data step*. No PDF parsing, no re-running anyone's SAS macros, no re-implementing rounding rules.
+
+> **SAS analog:** combining `_FREQ_` from two studies' `ODS OUTPUT` datasets after a meta-data harmonization step. ARS removes the harmonization step because the column names are guaranteed identical by spec.
+
+---
+
+### 8.18 Reproducibility, Snapshots, and Provenance
+
+A submission-grade ARD answers three questions on demand:
+
+1. **What was computed?** — the rows themselves, with `stat_name`, raw `stat`, formatted `stat_fmt`.
+2. **From what?** — the source data, captured by hash or version, alongside the ARD.
+3. **By whom and when?** — a provenance block: package versions, R version, run timestamp, user.
+
+A minimal provenance wrapper:
+
+```r
+ard_with_provenance <- list(
+  ard       = ard_demog,
+  source    = list(
+    dataset = "adsl",
+    md5     = digest::digest(adsl, algo = "md5"),
+    rows    = nrow(adsl)
+  ),
+  software  = list(
+    r_version    = R.version.string,
+    cards        = as.character(packageVersion("cards")),
+    cardx        = as.character(packageVersion("cardx")),
+    jsonlite     = as.character(packageVersion("jsonlite"))
+  ),
+  generated = list(
+    user      = Sys.info()[["user"]],
+    timestamp = format(Sys.time(), tz = "UTC", usetz = TRUE)
+  )
+)
+
+saveRDS(ard_with_provenance, "ard_demog_provenance.rds")
+```
+
+This is the R-side equivalent of a SAS `%LET RUNDT = %SYSFUNC(DATETIME());` plus a `OPTIONS NOTES NUMBER PAGENO=1;` capture, but stored as data instead of in a log file. It is part of the ARD when the ARD is what you ship.
+
+> **SAS analog:** the `_NULL_` step that captures `&SYSDATE9.`, `&SYSUSERID.`, and the version of every macro called, and writes them as a banner at the top of every output. The R version stores the same fields as a structured list bound to the ARD itself.
+
+---
+
+### 8.19 QC Pattern — Diffing Two ARDs
+
+The single biggest practical payoff of the ARD-first workflow is automated QC. Two independent programmers produce two ARDs from the same ADaM; the QC test is a row-by-row diff.
+
+```r
+key_cols   <- c("group1", "group1_level", "variable",
+                "variable_grp", "variable_grp_level", "stat_name")
+
+# rows in production but missing from QC
+anti_join(ard_prod, ard_qc, by = key_cols)
+
+# rows whose numeric value disagrees beyond a tolerance
+ard_prod %>%
+  inner_join(ard_qc, by = key_cols, suffix = c("_p", "_q")) %>%
+  mutate(diff = unlist(stat_p) - unlist(stat_q)) %>%
+  filter(abs(diff) > 1e-9)
+```
+
+That is the entire test. It runs in milliseconds, gives a deterministic answer, and is independent of any visual rendering.
+
+> **SAS analog:** `PROC COMPARE` between two `ODS OUTPUT` datasets, but with the column-naming question already settled by the ARD spec. You never need to write `RENAME=` clauses.
+
+---
+
+## Exercise 8.4 — Round-Trip an ARD Through ARS JSON
+
+Build a tiny one-row ARD, map it to an ARS `OperationResult` list using `map_row_to_ars()` from Exercise 8.3, serialize it with `jsonlite::toJSON()`, then parse it back with `jsonlite::fromJSON()` and confirm the `formattedValue` survives unchanged.
+
+```{r ch8-ex3, exercise=TRUE, exercise.lines=20}
+# A single ARD row to round-trip
+one_row <- tibble(
+  group1       = "TRT01A",
+  group1_level = "Xanomeline Low Dose",
+  variable     = "AGE",
+  stat_name    = "mean",
+  stat         = list(74.4),
+  stat_fmt     = "74.4"
+)
+
+map_row_to_ars <- function(row) {
+  list(
+    operationId  = row$stat_name,
+    resultGroups = list(list(groupingId = row$group1, groupId = row$group1_level)),
+    rawValue       = row$stat[[1]],
+    formattedValue = row$stat_fmt
+  )
+}
+
+# 1. Map -> 2. Serialize -> 3. Parse back
+ars_list   <- map_row_to_ars(one_row)
+ars_json   <- jsonlite::toJSON(ars_list, auto_unbox = ___, pretty = TRUE)
+parsed     <- jsonlite::fromJSON(ars_json, simplifyVector = FALSE)
+
+# Return the formattedValue from the parsed JSON
+parsed$formattedValue
+```
+
+```{r ch8-ex3-hint-1}
+# auto_unbox = TRUE collapses length-1 vectors into JSON scalars.
+```
+
+```{r ch8-ex3-solution}
+one_row <- tibble(
+  group1       = "TRT01A",
+  group1_level = "Xanomeline Low Dose",
+  variable     = "AGE",
+  stat_name    = "mean",
+  stat         = list(74.4),
+  stat_fmt     = "74.4"
+)
+map_row_to_ars <- function(row) {
+  list(
+    operationId  = row$stat_name,
+    resultGroups = list(list(groupingId = row$group1, groupId = row$group1_level)),
+    rawValue       = row$stat[[1]],
+    formattedValue = row$stat_fmt
+  )
+}
+ars_list   <- map_row_to_ars(one_row)
+ars_json   <- jsonlite::toJSON(ars_list, auto_unbox = TRUE, pretty = TRUE)
+parsed     <- jsonlite::fromJSON(ars_json, simplifyVector = FALSE)
+parsed$formattedValue
+```
+
+```{r ch8-ex3-check}
+grade_result(
+  pass_if(~ identical(.result, "74.4"), "Round-trip succeeded. The formattedValue is unchanged because the JSON encoding preserved it exactly."),
+  fail_if(~ TRUE, "Set auto_unbox = TRUE so length-1 vectors become JSON scalars, then re-run.")
+)
+```
+
+> **What this proves:** the ARS JSON is a faithful, lossless carrier of the ARD. The text `"74.4"` you stored survives serialization, byte-shipping, and re-parsing. This is the property that lets two systems — yours and the regulator's — disagree about *everything else* (operating system, R/SAS version, library paths) and still agree on what number was computed.
+
+---
+
+### 8.20 The Full Advanced-Workflow Pipeline
+
+Put the two halves together and the picture is one diagram you can keep on a sticky note:
+
+```
+   +---------------------+
+   |  ADaM dataset       |
+   +----------+----------+
+              |
+              |  ard_continuous(..., statistic = list(... = list(your_fn = ...)))
+              v
+   +---------------------+
+   |  custom-stat ARD    |   <-- sections 8.3 - 8.11
+   +----------+----------+
+              |
+              |  apply_fmt_fun()  +  bind_ard()  (Chapter 3)
+              v
+   +---------------------+
+   |  display-ready ARD  |   <-- still the standard schema
+   +----------+----------+
+              |
+              |  layout via gtsummary  (Chapter 6)
+              |  styled via flextable  (Chapter 7)
+              |        |
+              |        v
+              |   .docx / .rtf  ----> regulator (human-readable)
+              |
+              |  map_row_to_ars()  +  jsonlite::toJSON()
+              v
+   +---------------------+
+   |  ARS JSON           |   <-- sections 8.12 - 8.18
+   +---------------------+   ----> regulator (machine-readable)
+```
+
+The two arrows out of the display-ready ARD — one to the styled document, one to the ARS JSON — are why the entire `{cards}` philosophy is worth the effort. One source of truth, two deliverables, zero possibility of drift.
+
+> **SAS analog:** in SAS you would write a program that produces the RTF, and a *separate* program (typically a different macro) that produces the regulator's transport datasets. The two programs are independent, and divergence between them is a real and recurring risk. In the `{cards}` workflow, both deliverables come from the same in-memory ARD; divergence is structurally impossible.
+
+---
+
+## Exercise 8.5 — End-to-End Mini Pipeline
+
+Tie everything together. Given the `adsl` dataset, compute a custom **geometric mean** of `AGE` per `TRT01A` arm, attach a clear `stat_label`, format it to 1 decimal, then map the first row of the result to an ARS `OperationResult` list. Report that list.
+
+```{r ch8-ex5, exercise=TRUE, exercise.lines=35}
+# 1. Define the custom statistic
+geom_mean_safe <- function(x) {
+  x <- x[!is.na(x) & x > 0]
+  if (length(x) == 0) return(NA_real_)
+  exp(mean(log(x)))
+}
+
+# 2. Build the ARD with a custom label and a 1-decimal format
+ard_gm <- ard_continuous(
+  data       = adsl,
+  variables  = AGE,
+  by         = TRT01A,
+  statistic  = list(AGE = list(gmean = geom_mean_safe)),
+  fmt_fun    = list(AGE = list(gmean = 1)),
+  stat_label = list(AGE = list(gmean = "Geometric Mean"))
+) %>% apply_fmt_fun()
+
+# 3. Map the FIRST row to ARS shape
+map_row_to_ars <- function(row) {
+  list(
+    operationId  = row$stat_name,
+    resultGroups = list(list(groupingId = row$group1, groupId = row$group1_level)),
+    rawValue       = row$stat[[1]],
+    formattedValue = row$stat_fmt
+  )
+}
+
+first_row <- ard_gm[___, ]   # take the first row of the ARD
+map_row_to_ars(first_row)
+```
+
+```{r ch8-ex5-hint-1}
+# Use 1 to take the first row: ard_gm[1, ]
+```
+
+```{r ch8-ex5-solution}
+geom_mean_safe <- function(x) {
+  x <- x[!is.na(x) & x > 0]
+  if (length(x) == 0) return(NA_real_)
+  exp(mean(log(x)))
+}
+ard_gm <- ard_continuous(
+  data       = adsl,
+  variables  = AGE,
+  by         = TRT01A,
+  statistic  = list(AGE = list(gmean = geom_mean_safe)),
+  fmt_fun    = list(AGE = list(gmean = 1)),
+  stat_label = list(AGE = list(gmean = "Geometric Mean"))
+) %>% apply_fmt_fun()
+map_row_to_ars <- function(row) {
+  list(
+    operationId  = row$stat_name,
+    resultGroups = list(list(groupingId = row$group1, groupId = row$group1_level)),
+    rawValue       = row$stat[[1]],
+    formattedValue = row$stat_fmt
+  )
+}
+first_row <- ard_gm[1, ]
+map_row_to_ars(first_row)
+```
+
+```{r ch8-ex5-check}
+grade_result(
+  pass_if(~ is.list(.result) && .result$operationId == "gmean" && !is.null(.result$resultGroups), "Beautifully done. You used a custom statistic, formatted it, and exposed it through an ARS-shaped record — the full advanced workflow in one pipeline."),
+  fail_if(~ TRUE, "Take the first row with ard_gm[1, ] and pass it through map_row_to_ars().")
 )
 ```
 
@@ -207,11 +1173,83 @@ quiz(
   ),
 
   question(
-    "Which CDISC ARS object directly corresponds to a row of flat `{cards}` ARD containing a calculated value?",
+    "Where does the **name** you assign in the inner `statistic` list end up in the ARD?",
+    answer("The `variable` column"),
+    answer("The `stat_label` column"),
+    answer("The `stat_name` column", correct = TRUE),
+    answer("Nowhere — it is internal only"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why should a custom statistic function return `NA_real_` (rather than crash) when the input has no usable values?",
+    answer("Because R cannot crash"),
+    answer("So that every ARD row exists; missing values become `NE` in `stat_fmt`, never silently dropped rows", correct = TRUE),
+    answer("To save memory in the resulting ARD"),
+    answer("Because regulators reject any output containing NA"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which `fmt_fun` shape produces the string `\"75.2%\"` from the number `0.752`?",
+    answer("`gmean = 1`"),
+    answer("`gmean = function(x) sprintf(\"%.1f%%\", x * 100)`", correct = TRUE),
+    answer("`gmean = \"percent\"`"),
+    answer("`gmean = 0.75`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which CDISC ARS object directly corresponds to a single row of a flat `{cards}` ARD?",
     answer("AnalysisSet"),
     answer("OperationResult", correct = TRUE),
     answer("OutputDisplay"),
     answer("WhereClause"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "When mapping an ARD row to an ARS `OperationResult`, which ARS field receives `group1_level`?",
+    answer("`operationId`"),
+    answer("`groupingId`"),
+    answer("`groupId`", correct = TRUE),
+    answer("`formattedValue`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which ARS field receives the **unrounded** numeric value from the ARD `stat` list-column?",
+    answer("`formattedValue`"),
+    answer("`rawValue`", correct = TRUE),
+    answer("`operationId`"),
+    answer("`groupingId`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why is `auto_unbox = TRUE` important when calling `jsonlite::toJSON()` on an ARS-shaped list?",
+    answer("It compresses the JSON file"),
+    answer("It collapses length-1 R vectors into JSON scalars; without it, `\"mean\"` becomes `[\"mean\"]` and the schema validation fails", correct = TRUE),
+    answer("It removes NA values"),
+    answer("It is purely cosmetic"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which SAS construct most closely matches an R closure factory like `make_pctile(p = 0.95)`?",
+    answer("`PROC TRANSPOSE`"),
+    answer("A `%MACRO PCTILE(p=);` invoked with `%PCTILE(p=0.95)`", correct = TRUE),
+    answer("`PROC SQL` correlated subquery"),
+    answer("`OPTIONS MPRINT;`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Two programmers produce two ARDs from the same ADaM and you want a deterministic QC check. What is the most direct test?",
+    answer("Open both RTF files and visually compare"),
+    answer("`anti_join()` on the standard ARD key columns and compare `stat` values within tolerance", correct = TRUE),
+    answer("Re-run both programs and inspect the logs"),
+    answer("Render both ARDs to gtsummary tables and compare HTML"),
     allow_retry = TRUE
   )
 )
@@ -222,8 +1260,16 @@ quiz(
 ## Chapter 8 Summary {.congratulations}
 
 You now know how to:
-- Write and integrate **custom continuous statistics** functions in `{cards}`.
-- Map flat ARD columns directly to CDISC ARS **`OperationResult`** JSON specifications.
-- Understand the automated quality control benefits of standardized results metadata.
 
-**Congratulations!** You have completed the `{cards}` & `{cardx}` interactive training curriculum!
+- Define a **custom statistic** as an ordinary R function and register it inside `statistic = list(...)` for `ard_continuous()` — no package required.
+- Mix **built-in and custom** statistics in one call, control the row order via the order of the inner list, and assign **`stat_label`** to make the eventual table human-readable.
+- Drive formatting with **`fmt_fun`** — integers for decimal places, functions for percent signs, p-value truncation, and `NA → "NE"` substitution.
+- Use **closures** (`make_pctile(p = 0.95)`) to generate parameterized statistic functions without copy-paste.
+- Build **defensive custom functions** that survive empty groups, all-`NA` inputs, and edge values, returning `NA_real_` instead of crashing.
+- Read every column of a flat ARD as a field in the **CDISC ARS** `OperationResult`/`Analysis` hierarchy: `stat_name → operationId`, `group1/group1_level → groupingId/groupId`, `stat → rawValue`, `stat_fmt → formattedValue`.
+- Write a **mapper function** that turns one ARD row into an ARS-shaped R list, scale it to the whole ARD with `lapply()`, and serialize with `jsonlite::toJSON(auto_unbox = TRUE)`.
+- **Round-trip** an ARD through ARS JSON and back without information loss.
+- Attach **provenance metadata** (source data hash, package versions, run user/time) so the shipped ARD answers what, from what, and by whom.
+- Use ARDs for **deterministic, scriptable QC** via row-by-row diffs on standard key columns — the modern equivalent of `PROC COMPARE`.
+
+**Congratulations!** You have completed the `{cards}` & `{cardx}` interactive training curriculum. You now hold a complete, ARD-first reporting pipeline: from raw ADaM to custom statistics, from stacked ARDs to styled Word/RTF deliverables, and from R-side data structures to CDISC-compliant, regulator-ready JSON.

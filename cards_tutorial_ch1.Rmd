@@ -58,23 +58,289 @@ ard_json <- jsonlite::read_json("data/adsl_demog_ard.json")
 
 ## Chapter 1: Intro to ARD and cards
 
-### 1.1 Tidy Results vs. Static Displays
+### 1.1 Why ARD Exists — The Problem It Solves
 
-Traditionally, tables, figures, and listings (TFLs) are rendered directly into formatted PDF or RTF files. If a reviewer needs to run an audit or re-calculate a percentage, they must manually extract numbers from text boxes or recreate the calculation code. 
+For decades, clinical trial reporting has followed the same pattern: a SAS programmer writes a program that produces a formatted PDF or RTF file containing tables, figures, and listings (TFLs). The numbers, the rounding, the column headers, the footnotes, and the page breaks are all baked into the same output. The display *is* the data.
 
-**Analysis Results Data (ARD)** separates the calculation of numbers from the formatting of those numbers into table layout structures. An ARD is a simple, standardized, flat table where every computed statistic lives on its own row, capturing the raw numeric precision (`stat`) alongside its rounded, formatted display string (`stat_fmt`).
+This creates several painful downstream problems:
+
+- A medical reviewer who needs to verify a single percentage in a 200-page document has to extract it visually from a text box, then re-run the calculation in a separate program.
+- A regulator who wants to pool results across studies must re-key numbers from PDFs into spreadsheets.
+- A statistician who finds a rounding error has to track down which line of which SAS macro produced it.
+- An automated quality-control tool cannot "see" the numbers inside an RTF file — it can only see formatted strings.
+
+**Analysis Results Data (ARD)** is a deceptively simple idea that fixes all of this at once: store every computed statistic as a row in a flat, standardized dataset *before* anyone tries to format it into a table. The display layout and the statistical calculation become two separate, independently verifiable artifacts.
+
+```
+                  THE OLD WORKFLOW (display-first)
+  +----------+     +-----------+     +----------------+
+  |   ADaM   | --> | SAS macro | --> |  Final RTF/PDF |
+  +----------+     +-----------+     +----------------+
+                      |                     ^
+                      | numbers locked      | reviewer
+                      | inside formatted    | must re-key
+                      | output              | to audit
+                      v                     |
+                  (no machine-readable layer in between)
+
+
+                  THE NEW WORKFLOW (data-first)
+  +----------+    +---------+    +-----+    +---------------+
+  |   ADaM   | -> | {cards} | -> | ARD | -> | Table / Figure |
+  +----------+    +---------+    +-----+    +---------------+
+                                   |
+                                   +-> machine-readable
+                                   +-> audit-friendly
+                                   +-> reusable across displays
+                                   +-> easy to pool, compare, QC
+```
+
+The ARD is the bridge. Once it exists, the same numbers can drive an RTF table, a Shiny dashboard, a regulatory submission package, and an automated cross-study comparison — without anyone re-running the underlying calculation.
 
 ---
 
-### 1.2 The `{cards}` Schema
+### 1.2 SAS Programmer's Quick Map
 
-The `{cards}` package is the foundational tool for generating ARDs in R. Every function in `{cards}` returns a data frame containing standard columns:
+If you have spent years writing SAS code, almost every piece of the ARD world has a direct analog. The vocabulary is new; the concepts are familiar.
 
-- `group1`, `group1_level`: The grouping factor name and value (e.g., `TRT01A` and `Placebo`).
-- `variable`: The variable being summarized (e.g., `AGE`).
-- `variable_grp`, `variable_grp_level`: The categorical variable sub-group and level (e.g., `SEX` and `F`).
-- `stat_name`, `stat_label`: The statistical name (e.g., `mean`) and its display label (e.g., `Mean`).
-- `stat`, `stat_fmt`: The raw, full-precision statistic (stored in a list-column) and its formatted text representation.
+| SAS Concept                          | ARD / `{cards}` Equivalent              | Note                                                          |
+|--------------------------------------|-----------------------------------------|---------------------------------------------------------------|
+| `PROC MEANS` / `PROC SUMMARY`        | `ard_continuous()`                      | Produces mean, sd, median, etc., as long-format rows.         |
+| `PROC FREQ`                          | `ard_categorical()`                     | Produces n, N, % per level.                                   |
+| `ODS OUTPUT` of a PROC               | The ARD itself                          | ARD is a permanent, standardized "ODS OUTPUT" dataset.        |
+| `BY TRT01A;` statement               | `by = TRT01A` argument                  | Stratification variable.                                      |
+| `CLASS SEX;` statement               | Including `SEX` in `variables`          | Categorical sub-grouping.                                     |
+| `FORMAT AGE 5.1;`                    | `stat_fmt` column + `fmt_fun`           | Formatting lives next to the raw value, not on top of it.     |
+| `PUT(x, BEST.)`                      | `stat_fmt` string                       | The rendered, human-readable version of a number.             |
+| Raw numeric value before `FORMAT`    | `stat` (list-column with full precision)| The "unrounded truth" used for QC and re-display.             |
+| Macro variable holding a label       | `stat_label`                            | The text the reader sees in the column or row.                |
+| `WHERE SAFFL = "Y";`                 | `dplyr::filter(SAFFL == "Y")`           | Standard population-flag filter.                              |
+| RTF table shell built with `PROC REPORT` | `gtsummary` / `rtables` consuming an ARD | Layout becomes a separate concern from numbers.            |
+
+**Key mental shift:** in SAS, the *table* is the deliverable and a dataset is a stepping stone. In the ARD world, the *dataset* is the deliverable; the table is just one of many possible renderings of it.
+
+---
+
+### 1.3 What Lives in an ARD — Anatomy of a Single Row
+
+Every row in an ARD answers exactly one question: *"What is the value of one statistic, for one variable, in one population sub-group?"* Nothing more.
+
+Look at this single row from the demographics ARD that ships with this tutorial:
+
+```
+group1        : "TRT01A"
+group1_level  : "Placebo"
+variable      : "AGE"
+variable_grp  :  NULL
+variable_grp_level : NULL
+stat_name     : "mean"
+stat_label    : "Mean"
+stat          :  75.21
+stat_fmt      : "75.2"
+context       : "ard_continuous"
+```
+
+Read it as one English sentence: *"Within the Placebo arm (`group1_level` of `TRT01A`), the mean of AGE is 75.21, which should be displayed as `75.2`."*
+
+That is the whole philosophy in one row. The next sub-sections walk through every column.
+
+#### `group1` and `group1_level` — the column-strata pair
+
+These two together say *which population sub-group the row belongs to*. `group1` is the **name** of the stratification variable (e.g., `"TRT01A"`); `group1_level` is the **value** within that variable (e.g., `"Placebo"`).
+
+> **SAS analog:** the `BY` variable name versus the value of the `BY` variable in a given `BY` group. In a `PROC MEANS BY TRT01A;`, `TRT01A` is the name and `Placebo` is one of its levels.
+
+Storing the name as text (not as an attribute) is what makes the ARD truly portable: if you load the dataset into a different system, you can still tell which column was the stratification variable. There is no hidden metadata.
+
+`{cards}` also supports `group2`, `group3`, ... for nested strata (e.g., treatment arm × visit × sex).
+
+#### `variable` — the analysis variable
+
+The variable being summarized: `"AGE"`, `"WEIGHT"`, `"AVAL"`, etc. One row, one variable. Always.
+
+> **SAS analog:** the variable name in the `VAR` statement of `PROC MEANS` or the `TABLES` statement of `PROC FREQ`.
+
+#### `variable_grp` and `variable_grp_level` — the within-variable level
+
+For continuous summaries (mean, SD of AGE), these are `NULL` — there is no within-variable level for a continuous number.
+
+For categorical summaries, they tell you which level you are counting. A row about *"how many females are in the Placebo arm"* has:
+
+- `variable = "SEX"`
+- `variable_grp = "SEX"`
+- `variable_grp_level = "F"`
+
+This is how a frequency table is unrolled into one row per cell.
+
+> **SAS analog:** in `PROC FREQ`, the row-and-column position of a cell in a one-way or two-way frequency. Each cell becomes its own ARD row.
+
+#### `stat_name` and `stat_label` — the machine name and the human name
+
+`stat_name` is the lowercase, programmatic name of the statistic: `"n"`, `"mean"`, `"sd"`, `"median"`, `"p"`, `"min"`, `"max"`. Tools filter on this.
+
+`stat_label` is what a human will read in the final table: `"n"`, `"Mean"`, `"SD"`, `"Median"`, `"%"`, `"Min"`, `"Max"`. Display layers consume this.
+
+> **SAS analog:** the difference between the SAS variable name (`_STAT_ = "MEAN"`) inside an `ODS OUTPUT` dataset and the label you would assign for `PROC REPORT` column headers.
+
+Keeping the two separate is the same reason you keep variable names and variable labels separate in SAS: code uses one, humans read the other.
+
+#### `stat` — the unrounded truth (a list-column!)
+
+This is the raw, full-precision numeric value. In R, it lives in a *list-column* because different statistics return different shapes — `n` is a single integer, `quantiles` may return a numeric vector, a confidence interval returns two values, and a p-value comes back as a single double.
+
+The list-column is `{cards}`'s way of saying "whatever R object the statistic naturally produced, store it as-is — do not coerce, do not pre-format, do not lose precision."
+
+> **SAS analog:** the numeric variable in an `ODS OUTPUT` dataset *before* you apply a format. The number you would use to recalculate a derived quantity downstream.
+
+This is the value you trust for QC, for cross-study pooling, and for any recalculation. Never read `stat_fmt` and parse it back into a number — read `stat`.
+
+#### `stat_fmt` — the display string
+
+The formatted, rounded, human-readable text version of `stat`. Always a character string. `75.21` becomes `"75.2"`. `0.616` becomes `"61.6%"`. `0.0023` might become `"<0.01"`.
+
+> **SAS analog:** the output of `PUT(stat, format.)`, or equivalently, the value that lands in your RTF file when a `FORMAT` statement is in effect.
+
+The presentation layer (`gtsummary`, `rtables`, custom Quarto chunks) drops `stat_fmt` straight into the table cell. No further rounding logic is needed downstream.
+
+#### `context` — which `{cards}` function produced this row
+
+Tags such as `"ard_continuous"`, `"ard_categorical"`, `"ard_dichotomous"`, `"ard_missing"`, `"ard_total_n"`. Useful when several ARDs are stacked together and a layout tool needs to know "is this a count row or a mean row?"
+
+> **SAS analog:** the source procedure recorded in a stacked `ODS OUTPUT` dataset (`_PROCNAME_`).
+
+---
+
+### 1.4 `stat` vs `stat_fmt` — The Twin Columns That Make Everything Work
+
+This pairing is the single most important design choice in the entire ARD standard. It deserves its own diagram.
+
+```
+        ONE STATISTIC, STORED TWO WAYS
+
+        +---------------------------------+
+        |  AGE, Mean, Placebo arm         |
+        +---------------------------------+
+                       |
+            +----------+----------+
+            |                     |
+            v                     v
+   +-----------------+   +------------------+
+   | stat   = 75.21  |   | stat_fmt = "75.2"|
+   |  (numeric)      |   |  (character)     |
+   |  full precision |   |  rounded for     |
+   |  for QC, pooling|   |  the human eye   |
+   +-----------------+   +------------------+
+            |                     |
+            v                     v
+       used by:               used by:
+       - cross-study          - RTF tables
+         comparisons          - PDF listings
+       - re-rounding          - Shiny dashboards
+       - statistical          - regulatory
+         re-checks              displays
+       - audit trails
+```
+
+A single ARD therefore serves two audiences from one source of truth:
+
+- **Machines** (QC scripts, pooling tools, auditors) read `stat`.
+- **Humans** (medical writers, regulators, clinicians) read `stat_fmt`.
+
+The two are guaranteed to be consistent because one was derived from the other inside the same function call. No "I rounded in one place and forgot in another" bug is possible.
+
+> **SAS analog:** think of `stat` as the unformatted numeric variable and `stat_fmt` as that same variable with a `FORMAT` applied — except both versions are persisted side-by-side in the dataset instead of one of them living only as display metadata.
+
+---
+
+### 1.5 From One ARD to Many Table Shells — The Mapping
+
+Here is what makes ARD genuinely powerful: the same ARD can produce *different* table layouts simply by deciding which columns become rows of the display, which become columns, and which become section headers.
+
+Consider a small ARD describing AGE (mean, SD) and SEX (n, %) for two treatment arms. As a flat dataset it looks like:
+
+```
+ group1_level  variable  variable_grp_level  stat_name  stat_label  stat_fmt
+ ------------  --------  ------------------  ---------  ----------  --------
+ Placebo       AGE       NA                  mean       Mean        75.2
+ Placebo       AGE       NA                  sd         SD          8.12
+ Placebo       SEX       F                   n          n           53
+ Placebo       SEX       F                   p          %           61.6%
+ Placebo       SEX       M                   n          n           33
+ Placebo       SEX       M                   p          %           38.4%
+ Xan High      AGE       NA                  mean       Mean        74.4
+ Xan High      AGE       NA                  sd         SD          7.89
+ Xan High      SEX       F                   n          n           50
+ Xan High      SEX       F                   p          %           59.5%
+ Xan High      SEX       M                   n          n           34
+ Xan High      SEX       M                   p          %           40.5%
+```
+
+A typical demographics table shell wants treatment arms across the top and variables down the side:
+
+```
+                          |  Placebo (N=86)   |  Xan High (N=84)
+--------------------------+-------------------+------------------
+Age (years)               |                   |
+  Mean (SD)               |  75.2 (8.12)      |  74.4 (7.89)
+--------------------------+-------------------+------------------
+Sex, n (%)                |                   |
+  Female                  |  53 (61.6%)       |  50 (59.5%)
+  Male                    |  33 (38.4%)       |  34 (40.5%)
+```
+
+The mapping from ARD columns to the shell is mechanical:
+
+| Display element            | Comes from ARD column                          |
+|----------------------------|------------------------------------------------|
+| Column headers (treatment) | `group1_level`                                 |
+| Column sub-headers (N=…)   | `ard_total_n()` rows for each `group1_level`   |
+| Section header ("Age", "Sex") | `variable`                                  |
+| Row label inside section   | `stat_label` (for continuous) or `variable_grp_level` (for categorical) |
+| Cell value                 | `stat_fmt`                                     |
+| Combining "Mean (SD)" into one cell | a layout step joining two `stat_fmt` values from the same `variable` + `group1_level` |
+
+Same ARD, different shell? Pivot it the other way — treatments down the rows, statistics across the columns — and the underlying numbers do not change one bit. This is *why* the layout and the calculation are kept apart.
+
+> **SAS analog:** the `OUT=` dataset from `PROC SUMMARY` could feed either a `PROC REPORT` ACROSS layout or a `PROC TRANSPOSE` followed by a different `PROC REPORT`. The ARD generalizes that idea and standardizes the column names so any layout tool can consume it.
+
+---
+
+### 1.6 How `{cards}` Functions Populate the Schema
+
+Every function in the `{cards}` package returns a data frame following the same standard schema. Knowing the schema once means you can read any `{cards}` output forever.
+
+```
+       INPUT: tidy data frame (ADaM dataset)
+                  |
+                  v
+  +----------------------------------------+
+  |  ard_continuous(by = TRT01A,           |
+  |                 variables = AGE)       |
+  +----------------------------------------+
+                  |
+                  v   one row per (group1_level x stat_name)
+  +----------------------------------------+
+  |  group1 = "TRT01A"                     |
+  |  group1_level = "Placebo" | "Xan High" |
+  |  variable = "AGE"                      |
+  |  stat_name = n | mean | sd | median... |
+  |  stat (list-col), stat_fmt (chr)       |
+  |  context = "ard_continuous"            |
+  +----------------------------------------+
+```
+
+The standard columns are:
+
+- `group1`, `group1_level` — the grouping factor name and value (e.g., `TRT01A` and `Placebo`). Additional strata appear as `group2`, `group3`, ...
+- `variable` — the variable being summarized (e.g., `AGE`).
+- `variable_grp`, `variable_grp_level` — the categorical variable sub-group and level (e.g., `SEX` and `F`).
+- `stat_name`, `stat_label` — the statistical name (e.g., `mean`) and its display label (e.g., `Mean`).
+- `stat`, `stat_fmt` — the raw, full-precision statistic (stored in a list-column) and its formatted text representation.
+- `context` — which `{cards}` function produced the row.
+
+Because every function returns the same schema, you can `dplyr::bind_rows()` an `ard_continuous()` result with an `ard_categorical()` result with an `ard_missing()` result and immediately have a single, layout-ready dataset.
+
+> **SAS analog:** imagine if every `PROC` you ran emitted an `ODS OUTPUT` dataset with identical column names — you could `SET` them together without renaming anything. That is exactly the contract `{cards}` enforces.
 
 ---
 
@@ -83,7 +349,7 @@ The `{cards}` package is the foundational tool for generating ARDs in R. Every f
 Before generating an ARD, let's explore our input data. We are working with the `adsl` subject-level dataset from the `{pharmaverseadam}` package. Let's find out how many unique subjects and treatment arms are in the Safety Population (`SAFFL == 'Y'`).
 
 ```{r ch1-ex1, exercise=TRUE, exercise.lines=8}
-# Count the number of subjects in the Safety Population (SAFFL == "Y") 
+# Count the number of subjects in the Safety Population (SAFFL == "Y")
 # and list the unique values of TRT01A (Treatment Arm).
 
 adsl %>%
@@ -97,6 +363,8 @@ grade_result(
   fail_if(~ TRUE, "Try filtering where SAFFL == 'Y' and retrieving distinct TRT01A values.")
 )
 ```
+
+> **Why this matters for ARD:** every distinct value you just listed will appear as a `group1_level` in the resulting ARD. Three treatment arms × one statistic per variable = three rows per statistic. Mean of AGE alone produces three rows; n, Mean, SD, Median, Min, Max for AGE produces 18 rows. Numbers add up fast — and that is by design.
 
 ---
 
@@ -126,6 +394,8 @@ grade_result(
   fail_if(~ TRUE, "Try retrieving the first element using: ard_json[[1]]")
 )
 ```
+
+> **Read the row aloud:** "Within the Placebo arm of TRT01A, the count (n) of subjects with a non-missing AGE is 86, displayed as `86`, and this row was produced by `ard_continuous()`." Every ARD row reads as a complete English sentence — that is the design payoff.
 
 ---
 
@@ -160,6 +430,33 @@ quiz(
     answer("stat_fmt"),
     answer("variable_grp"),
     allow_retry = TRUE
+  ),
+
+  question(
+    "A row in an ARD has `variable = \"SEX\"`, `variable_grp_level = \"F\"`, `stat_name = \"p\"`, `stat_fmt = \"61.6%\"`, and `group1_level = \"Placebo\"`. What does it mean?",
+    answer("The probability that any Placebo subject is female is 61.6%."),
+    answer("Within the Placebo arm, 61.6% of subjects are female.", correct = TRUE),
+    answer("61.6 females received Placebo."),
+    answer("The p-value for the SEX comparison in the Placebo arm is 0.616."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which SAS procedure most closely corresponds to `ard_categorical()`?",
+    answer("PROC MEANS"),
+    answer("PROC REPORT"),
+    answer("PROC FREQ", correct = TRUE),
+    answer("PROC TRANSPOSE"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which ARD column tells a downstream layout tool which `{cards}` function produced the row?",
+    answer("variable"),
+    answer("stat_label"),
+    answer("group1"),
+    answer("context", correct = TRUE),
+    allow_retry = TRUE
   )
 )
 ```
@@ -169,9 +466,12 @@ quiz(
 ## Chapter 1 Summary {.congratulations}
 
 You now understand:
-- The concept of **Analysis Results Data (ARD)**.
-- Why separating calculations from presentation is essential for automation and quality control.
-- The columns that compose the standard `{cards}` ARD schema.
-- The difference between `stat` (raw value in a list-column) and `stat_fmt` (formatted character string).
 
-**Next:** Chapter 2 — Core `{cards}` Operations (`ard_continuous`, `ard_categorical`, etc.)
+- The concept of **Analysis Results Data (ARD)** and the workflow problem it was invented to solve.
+- Why separating calculations from presentation is essential for automation, quality control, and regulatory transparency.
+- The standard `{cards}` ARD schema, column by column: `group1`/`group1_level`, `variable`, `variable_grp`/`variable_grp_level`, `stat_name`/`stat_label`, `stat`/`stat_fmt`, and `context`.
+- The critical role of the **`stat` vs `stat_fmt` twin columns**: full-precision numbers for machines, formatted strings for humans, stored side-by-side so the two can never disagree.
+- How each ARD column maps to a position in a final table shell — column header, section header, row label, or cell value.
+- How familiar SAS tools (`PROC MEANS`, `PROC FREQ`, `BY`, `CLASS`, `FORMAT`, `ODS OUTPUT`) map onto `{cards}` functions and ARD columns.
+
+**Next:** Chapter 2 — Core `{cards}` Operations (`ard_continuous`, `ard_categorical`, etc.) where you will build ARDs of your own from scratch.

@@ -38,17 +38,115 @@ data("adsl",  package = "pharmaverseadam")
 
 ## Chapter 2: Core cards Operations
 
-### 2.1 Continuous, Categorical, and Dichotomous Functions
+### 2.1 The `{cards}` Function Family — One Per Data Type
 
-The `{cards}` package provides a set of specialized functions to calculate statistics based on the data type:
+In Chapter 1 you learned what an ARD *is*. This chapter teaches you how to *produce* one. The `{cards}` package gives you a small, sharp set of functions — each one specialized for a single data-type pattern that appears constantly in clinical reporting.
 
-- **`ard_continuous()`**: Calculates continuous summaries (such as `mean`, `sd`, `median`, `min`, `max`, and quantiles).
-- **`ard_categorical()`**: Computes frequency tables, outputting counts (`n`), denominators (`N`), and percentages (`p`) for every level of a categorical factor.
-- **`ard_dichotomous()`**: Extracts categorical summaries but retains only a single positive outcome level (e.g. keeping only response `"Y"`).
-- **`ard_missing()`**: Summarizes counts and percentages of missing (`NA`) vs non-missing values.
-- **`ard_total_n()`**: Calculates the total subject count (denominator) per grouping.
+```
+                       INPUT: tidy data frame (ADaM)
+                                   |
+        +-----------------+--------+--------+----------------+
+        |                 |                 |                |
+        v                 v                 v                v
+  +-------------+  +---------------+  +---------------+  +-------------+
+  |ard_continuous|  |ard_categorical|  |ard_dichotomous|  |ard_missing  |
+  +-------------+  +---------------+  +---------------+  +-------------+
+  numeric vars     factor / char     yes/no flags         any var
+  AGE, BMI, AVAL   SEX, RACE         SAFFL, TRTEMFL       missingness
+  PROC MEANS       PROC FREQ         PROC FREQ (1 cell)   PROC MEANS NMISS
+        |                 |                 |                |
+        +-----------------+--------+--------+----------------+
+                                   |
+                                   v
+                       OUTPUT: standardized ARD rows
+                       (same schema you saw in Ch.1)
+                                   |
+                                   v
+                          ard_total_n() adds
+                          denominator rows used
+                          for "N=…" column headers
+```
 
-All of these functions share the `by` argument to group calculations by variables such as `TRT01A`.
+The principle: pick the function that matches the *data type and the question*, not one giant function with many switches.
+
+| Function              | Use for                                                | Closest SAS analog                              |
+|-----------------------|--------------------------------------------------------|-------------------------------------------------|
+| `ard_continuous()`    | Numeric variables: AGE, WEIGHT, AVAL, CHG, BMI         | `PROC MEANS` / `PROC SUMMARY`                   |
+| `ard_categorical()`   | Multi-level categorical: SEX, RACE, AGEGR1, SEVERITY   | `PROC FREQ` (one-way, two-way)                  |
+| `ard_dichotomous()`   | Yes/No flags shown as a single "Y" row: SAFFL, TRTEMFL | `PROC FREQ` then keeping one row in a data step |
+| `ard_missing()`       | Missingness counts/percentages per variable            | `NMISS` in `PROC MEANS`                         |
+| `ard_total_n()`       | Treatment-arm subject totals for table headers         | `_FREQ_` after `PROC SUMMARY` on a `BY` group   |
+
+Every function shares the same three core arguments:
+
+- `data` — the data frame (your filtered ADaM).
+- `variables` — which column(s) to summarize.
+- `by` — the stratification variable (treatment arm, visit, etc.).
+
+And every function returns the same ARD schema (`group1`, `variable`, `stat_name`, `stat`, `stat_fmt`, ...). That uniformity is what lets you `bind_rows()` outputs from different `{cards}` functions into a single layout-ready dataset.
+
+> **SAS analog mental model:** imagine a parallel universe where `PROC MEANS`, `PROC FREQ`, and a missingness PROC all emitted `ODS OUTPUT` datasets with identical column names. You could `SET` them together without a single `RENAME`. That is `{cards}`.
+
+---
+
+### 2.2 `ard_continuous()` — The Continuous Workhorse
+
+#### 2.2.1 What it produces
+
+For every (treatment arm × variable) combination, `ard_continuous()` emits one row per statistic. The default statistics are familiar: `N`, `mean`, `sd`, `median`, `p25`, `p75`, `min`, `max`, and a count of missing values.
+
+```
+       PROC MEANS DATA=adsl;                |    ard_continuous(
+         CLASS TRT01A;                      |      data = adsl,
+         VAR   AGE;                         |      variables = AGE,
+       RUN;                                 |      by = TRT01A
+                                            |    )
+       --------------------------------     |    --------------------------------
+       Wide output:                         |    Long output:
+         TRT01A   N   Mean   Std   ...      |      group1_level | stat_name | stat_fmt
+         Placebo  86  75.21  8.12  ...      |      Placebo      | n         | 86
+         Xan Hi   84  74.38  7.89  ...      |      Placebo      | mean      | 75.2
+                                            |      Placebo      | sd        | 8.12
+                                            |      ...
+```
+
+This long shape is the single biggest mindset shift for a SAS programmer. `PROC MEANS` gives you a wide row per `BY` group with one column per statistic; `ard_continuous()` gives you a long row per *(BY group × statistic)*. The data is the same; the orientation is different. The long shape is what makes the output uniform across all `{cards}` functions and trivial to drive a layout from.
+
+#### 2.2.2 Anatomy of an `ard_continuous()` call
+
+```r
+ard_continuous(
+  data      = adsl,        # the input frame, like DATA= in a PROC
+  variables = c(AGE, BMI), # which numeric columns to summarize
+  by        = TRT01A,      # the BY / CLASS variable
+  statistic = ~ list(      # OPTIONAL: customize which stats are computed
+                "N", "mean", "sd", "median", "min", "max"
+              )
+)
+```
+
+- **`variables`** can be a single bare name (`AGE`) or several (`c(AGE, BMI, HEIGHT)`); every variable becomes its own block of rows in the ARD.
+- **`by`** is the grouping variable. Multiple grouping variables become `c(TRT01A, AVISIT)`, producing nested `group1`, `group2`.
+- **`statistic`** lets you override the default list. If you only want `n`, `mean`, and `sd`, say so — the ARD shrinks accordingly. This is the `{cards}` equivalent of writing `MEAN STD;` after a `PROC MEANS` statement.
+
+> **SAS analog:** `VAR AGE BMI;` → `variables = c(AGE, BMI)`. `CLASS TRT01A;` → `by = TRT01A`. `PROC MEANS N MEAN STD;` → `statistic = ~ list("N", "mean", "sd")`.
+
+#### 2.2.3 How the output maps to a table cell
+
+```
+ARD row:                          Table cell:
+  variable      = AGE             +------------------------+
+  group1_level  = Placebo         |  Age, Mean (SD)        |
+  stat_name     = mean            |  Placebo: 75.2 (8.12)  |
+  stat_fmt      = "75.2"          +------------------------+
+  +
+  variable      = AGE
+  group1_level  = Placebo
+  stat_name     = sd
+  stat_fmt      = "8.12"
+```
+
+The layout engine downstream simply glues `mean_fmt` and `sd_fmt` together into the string `"75.2 (8.12)"` and drops it in the right cell. The arithmetic, the rounding, and the cell composition are three separate, individually verifiable steps.
 
 ---
 
@@ -83,6 +181,53 @@ grade_result(
 )
 ```
 
+> **Read the output:** scroll through the `stat_name` column. You will see `n`, `mean`, `sd`, `median`, `p25`, `p75`, `min`, `max`, and `N_miss` — one row each per treatment arm. Three arms × nine statistics = roughly 27 rows for a single variable. That density is the price of the long format and the reason ARDs are so easy to filter, slice, and re-layout downstream.
+
+---
+
+### 2.3 `ard_categorical()` — Frequencies, Levels, and Denominators
+
+#### 2.3.1 What it produces
+
+For every (treatment arm × variable × level) combination, `ard_categorical()` emits two rows: the count `n` and the percentage `p`. It optionally produces the denominator `N` as well.
+
+```
+       PROC FREQ DATA=adsl;          |    ard_categorical(
+         TABLES SEX*TRT01A;          |      data = adsl,
+       RUN;                          |      variables = SEX,
+                                     |      by = TRT01A
+                                     |    )
+       -----------------------       |    -----------------------
+       Wide cross-tab:               |    Long ARD:
+         SEX  Placebo  XanHi         |      group1_level | variable_grp_level | stat_name | stat_fmt
+         F    53(61.6) 50(59.5)      |      Placebo      | F                  | n         | 53
+         M    33(38.4) 34(40.5)      |      Placebo      | F                  | p         | 61.6%
+                                     |      Placebo      | M                  | n         | 33
+                                     |      Placebo      | M                  | p         | 38.4%
+                                     |      Xan High     | F                  | n         | 50
+                                     |      ...
+```
+
+A two-level categorical × three treatment arms produces *six cells*, and each cell becomes *two rows* (n and p) — twelve rows total. Add `N` and it becomes eighteen. The row count balloons quickly. That is normal. ARDs are meant to be filtered, not read whole.
+
+#### 2.3.2 Denominator choices — the most important option
+
+This is where many SAS programmers stumble on the first read, because `PROC FREQ` hides the choice inside a `PERCENT` keyword. In `{cards}`, the denominator is explicit.
+
+| `denominator` value | Percentage is computed against...                                | SAS analog                            |
+|---------------------|------------------------------------------------------------------|---------------------------------------|
+| `"column"` (default)| Total non-missing observations within each `by` (treatment arm)  | `COLPERCENT` in `PROC FREQ`           |
+| `"row"`             | Total observations within each level of the analysis variable    | `ROWPERCENT`                          |
+| `"cell"`            | Total observations in the entire dataset                         | `PERCENT` (cell percentages)          |
+
+Picking the wrong denominator silently produces wrong percentages. Always ask: *"What population does each percentage refer to?"* — that is the denominator.
+
+> **Mnemonic:** column percent = "out of this treatment arm." Row percent = "out of all subjects in this category." Cell = "out of everyone."
+
+#### 2.3.3 Level ordering
+
+Level order in the ARD follows the level order of the variable in the input data. If `SEX` is a factor with levels `c("F", "M")`, the ARD rows appear in that order. If you need a custom order (Placebo first, active arms last), set the factor levels *before* calling `ard_categorical()`. Same rule as `PROC FREQ ORDER=DATA` vs. `ORDER=FORMATTED`.
+
 ---
 
 ## Exercise 2.2 — Summarize Categorical Data
@@ -115,6 +260,49 @@ grade_result(
   fail_if(~ TRUE, "Verify that you are using ard_categorical() with variables = SEX and by = TRT01A.")
 )
 ```
+
+> **Check the math:** sum the `n` values for `variable_grp_level = "F"` and `"M"` within `group1_level = "Placebo"`. The total should equal the total Placebo subject count. That equality is what makes the default column denominator natural for demographics tables: each column tells you how the treatment arm breaks down by sex.
+
+---
+
+### 2.4 `ard_dichotomous()` — One Row Per Yes/No Flag
+
+#### 2.4.1 Why it exists
+
+Clinical data is full of binary flags: `SAFFL` ("Y"/"N"), `TRTEMFL` ("Y"/"N"), `FASFL`, `ITTFL`, `DTHFL`. In a typical table you only ever display the *positive* row — *"86 of 86 subjects (100%) were in the Safety Population"*, not also *"0 of 86 (0%) were not."*
+
+`ard_categorical()` would happily produce both the `Y` and the `N` rows. `ard_dichotomous()` is a thin wrapper that produces *only the positive row*, saving downstream filtering and reducing the chance of an "N=0 (0%)" row leaking into your table.
+
+```
+                        ard_categorical(SAFFL)
+                        +-------------------+
+                        | Placebo | Y | n=86|   <-- kept
+                        | Placebo | Y | p=1 |   <-- kept
+                        | Placebo | N | n=0 |   <-- you didn't want this
+                        | Placebo | N | p=0 |   <-- you didn't want this
+                        +-------------------+
+
+                        ard_dichotomous(SAFFL, value=list(SAFFL="Y"))
+                        +-------------------+
+                        | Placebo | Y | n=86|   <-- kept
+                        | Placebo | Y | p=1 |   <-- kept
+                        +-------------------+
+```
+
+#### 2.4.2 The `value` argument
+
+`value = list(SAFFL = "Y")` says *"for the variable SAFFL, the positive level is 'Y'."* The list form lets you supply multiple variables in one call with possibly different positive levels:
+
+```r
+ard_dichotomous(
+  data      = adsl,
+  by        = TRT01A,
+  variables = c(SAFFL, ITTFL, DTHFL),
+  value     = list(SAFFL = "Y", ITTFL = "Y", DTHFL = "Y")
+)
+```
+
+> **SAS analog:** `PROC FREQ` with `WHERE SAFFL = "Y";` then keeping only that level in the output dataset. `ard_dichotomous()` does it in one call without a `WHERE` mutation of the input data — important because the denominator should still reflect the full treatment arm (it does).
 
 ---
 
@@ -150,6 +338,252 @@ grade_result(
 )
 ```
 
+> **Notice what is missing:** the output does not contain any row with `variable_grp_level = "N"`. That is the entire point of dichotomous. If you ever need both rows (rare for flag variables, common for disposition reasons), use `ard_categorical()` instead.
+
+---
+
+### 2.5 `ard_missing()` and `ard_total_n()` — The Helper Rows
+
+These two short functions are easy to overlook and impossible to live without once you start assembling real table shells.
+
+#### 2.5.1 `ard_missing()` — explicit missingness rows
+
+Almost every regulatory table has a "Missing" line:
+
+```
+Age (years)
+  n                     86
+  Mean (SD)             75.2 (8.12)
+  Median (Q1, Q3)       76.0 (70, 81)
+  Min, Max              52, 89
+  Missing               0
+```
+
+The default statistics of `ard_continuous()` already include `N_miss`, but for categorical variables or for cases where you want a dedicated, clearly-labeled missing summary, `ard_missing()` provides:
+
+- `N_obs` — total observations.
+- `N_miss` — count of `NA`.
+- `p_miss` — percentage missing.
+
+```r
+ard_missing(
+  data      = adsl,
+  by        = TRT01A,
+  variables = AGE
+)
+```
+
+> **SAS analog:** `PROC MEANS NMISS;` or counting missing levels in `PROC FREQ MISSING;`. `ard_missing()` collapses both styles into one consistent ARD shape.
+
+#### 2.5.2 `ard_total_n()` — the denominator row that drives column headers
+
+Look at a demographics table header:
+
+```
+                  Placebo (N=86)   Xanomeline Low Dose (N=84)   Xanomeline High Dose (N=84)
+```
+
+Where do those `N=86`, `N=84`, `N=84` numbers come from? They are *not* the n of any one variable — they are the total subject count per treatment arm. That number lives in its own row of the ARD, produced by `ard_total_n()`:
+
+```r
+ard_total_n(data = adsl, by = TRT01A)
+```
+
+Output:
+
+```
+  group1_level         | stat_name | stat_fmt
+  Placebo              | N         | 86
+  Xanomeline Low Dose  | N         | 84
+  Xanomeline High Dose | N         | 84
+```
+
+The layout engine reads these rows separately and uses them to populate the *column header* of the table — not the body. Without `ard_total_n()`, you have no clean way to display "Placebo (N=86)" because that "86" is not a property of any one analysis variable.
+
+> **SAS analog:** the implicit `_FREQ_` variable that `PROC SUMMARY` produces for each `BY` group, but stored as an explicit, labeled row that survives all the way through to the layout.
+
+#### 2.5.3 The handshake between helper rows and body rows
+
+```
+   +----------------------------+
+   |   ard_total_n()  --> N=86  |---+
+   +----------------------------+   |
+                                    +---> drives column header
+   +----------------------------+   |
+   |   ard_continuous(AGE)      |   |
+   |     mean, sd, median ...   |---+---> drives table body
+   +----------------------------+   |
+                                    |
+   +----------------------------+   |
+   |   ard_categorical(SEX)     |   |
+   |     n, p per level         |---+
+   +----------------------------+
+```
+
+All three ARDs share the same `group1` / `group1_level` columns (`TRT01A` / `Placebo`...), so a layout engine can join them on those keys and place each value exactly where it belongs.
+
+---
+
+## Exercise 2.4 — Build the Denominator Row
+
+Use `ard_total_n()` to produce the subject counts per treatment arm in `adsl`. These will become the `(N=…)` numbers in the column headers of your demographics table.
+
+```{r ch2-ex4, exercise=TRUE, exercise.lines=8}
+# Generate total N per TRT01A
+# Hint: ard_total_n() needs only data and by.
+
+ard_total_n(
+  data = adsl,
+  by = ___
+)
+```
+
+```{r ch2-ex4-hint-1}
+ard_total_n(data = adsl, by = TRT01A)
+```
+
+```{r ch2-ex4-solution}
+ard_total_n(data = adsl, by = TRT01A)
+```
+
+```{r ch2-ex4-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && "N" %in% .result$stat_name, "Correct! These N rows will appear in the column headers of any treatment-arm table you build from this dataset."),
+  fail_if(~ TRUE, "Pass TRT01A to the by argument of ard_total_n().")
+)
+```
+
+---
+
+### 2.6 The `by` Argument — Single, Multiple, and Zero Stratification
+
+`by` is the unifying argument across the whole `{cards}` family. It has three useful shapes.
+
+| Shape                              | Meaning                                    | Effect on the ARD                        |
+|------------------------------------|--------------------------------------------|------------------------------------------|
+| `by = TRT01A`                      | Stratify by one variable (treatment arm)   | Rows split by `group1_level`             |
+| `by = c(TRT01A, AVISIT)`           | Two-level stratification (arm × visit)     | Adds `group2`, `group2_level` columns    |
+| omitted (no `by`)                  | Overall summary, no stratification         | Single block of rows, no `group1` split  |
+
+A common pattern is to call the same function twice — once with `by = TRT01A` for the per-arm columns and once without `by` for a "Total" column — then `bind_rows()` the two ARDs. That is how a "Treated / Placebo / Total" four-column table is typically assembled.
+
+> **SAS analog:** a `BY` statement with one variable vs. multiple variables vs. omitted. The mental model is identical.
+
+---
+
+### 2.7 Summarizing Multiple Variables in One Call
+
+You almost never want to call `ard_continuous()` separately for AGE, then BMI, then HEIGHT. Pass them all at once:
+
+```r
+ard_continuous(
+  data      = adsl,
+  variables = c(AGE, BMI, HEIGHTBL),
+  by        = TRT01A
+)
+```
+
+The resulting ARD has three blocks of rows — one for each variable — already in the standard schema and ready to stack with categorical, dichotomous, missing, and total-N ARDs into one big input for a layout engine. That single call is the `{cards}` answer to writing three `PROC MEANS` statements in a row.
+
+```
+  variable | group1_level | stat_name | stat_fmt
+  AGE      | Placebo      | mean      | 75.2
+  AGE      | Placebo      | sd        | 8.12
+  AGE      | Xan High     | mean      | 74.4
+  ...
+  BMI      | Placebo      | mean      | 26.3
+  BMI      | Placebo      | sd        | 4.20
+  ...
+  HEIGHTBL | Placebo      | mean      | 167.1
+  ...
+```
+
+The same pattern works for `ard_categorical(variables = c(SEX, RACE, AGEGR1))`.
+
+---
+
+### 2.8 Choosing Which Statistics Get Computed
+
+The `statistic` argument of `ard_continuous()` lets you trim or extend the default list. Two common patterns:
+
+```r
+# Only n, mean, sd
+ard_continuous(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A,
+  statistic = ~ list("N", "mean", "sd")
+)
+
+# Default list plus the 95% quantile
+ard_continuous(
+  data      = adsl,
+  variables = AGE,
+  by        = TRT01A,
+  statistic = ~ list("N", "mean", "sd", "median",
+                     "p25", "p75", "min", "max",
+                     p95 = ~ stats::quantile(.x, 0.95, na.rm = TRUE))
+)
+```
+
+A named entry in the list (here `p95 = ~ ...`) lets you plug in *any* R function. The result still lands in `stat` (raw) and `stat_fmt` (formatted) — the ARD shape never changes, only the rows present.
+
+> **SAS analog:** the keyword list after a `PROC MEANS` statement (`PROC MEANS N MEAN STD P95;`). The `{cards}` `statistic` list is the same idea, with the bonus that any custom R function can be added without leaving the API.
+
+---
+
+## Exercise 2.5 — Multiple Variables in One Call
+
+Summarize **two** continuous variables (`AGE` and `BMIBL`) in `adsl`, both grouped by `TRT01A`, in a single `ard_continuous()` call. Look at the output and observe that the ARD already contains *both* variables stacked into the same standard shape.
+
+```{r ch2-ex5, exercise=TRUE, exercise.lines=10}
+# Hint: use c(AGE, BMIBL) in the variables argument.
+
+ard_continuous(
+  data = adsl,
+  variables = c(___, ___),
+  by = TRT01A
+)
+```
+
+```{r ch2-ex5-hint-1}
+ard_continuous(data = adsl, variables = c(AGE, BMIBL), by = TRT01A)
+```
+
+```{r ch2-ex5-solution}
+ard_continuous(data = adsl, variables = c(AGE, BMIBL), by = TRT01A)
+```
+
+```{r ch2-ex5-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && all(c("AGE", "BMIBL") %in% .result$variable), "Nice! Both variables now share the same ARD. This is the pattern you will use to feed multi-row sections of a demographics table."),
+  fail_if(~ TRUE, "Pass both AGE and BMIBL to variables as c(AGE, BMIBL).")
+)
+```
+
+> **Inspect the `variable` column:** it now contains both `"AGE"` and `"BMIBL"`. A layout engine groups rows by `variable` to build section headers ("Age (years)", "BMI (kg/m²)") with their statistic rows underneath — exactly the structure of a real demographics table.
+
+---
+
+### 2.9 The Big Picture — What You Have Built So Far
+
+After this chapter you can produce, in a few function calls, every row a demographics or disposition table needs:
+
+```
+  ard_total_n(adsl, by = TRT01A)                     -> N=86, N=84, N=84    (header)
+  ard_continuous(adsl, c(AGE,BMIBL), by=TRT01A)      -> Age, BMI rows       (body)
+  ard_categorical(adsl, c(SEX,RACE), by=TRT01A)      -> Sex, Race rows      (body)
+  ard_dichotomous(adsl, SAFFL,
+                   value=list(SAFFL="Y"), by=TRT01A) -> Safety Pop row      (body)
+  ard_missing(adsl, AGE, by=TRT01A)                  -> Missing row         (body)
+                              |
+                              |  bind_rows()
+                              v
+                  ONE STACKED ARD, ready for layout
+```
+
+What is missing? The mechanics of *stacking* those ARDs and *applying consistent formatting* across them. That is exactly Chapter 3.
+
 ---
 
 ## Chapter 2 Knowledge Check
@@ -183,6 +617,42 @@ quiz(
     answer("by", correct = TRUE),
     answer("strata"),
     allow_retry = TRUE
+  ),
+
+  question(
+    "In `ard_categorical()`, what does the default `denominator = \"column\"` mean?",
+    answer("Percentages are computed against the total sample size in the entire dataset."),
+    answer("Percentages are computed within each level of the analysis variable."),
+    answer("Percentages are computed within each by group (e.g., within each treatment arm).", correct = TRUE),
+    answer("Percentages are not computed at all."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which function produces the `(N=86)` numbers shown in the column header of a demographics table?",
+    answer("ard_continuous()"),
+    answer("ard_categorical()"),
+    answer("ard_total_n()", correct = TRUE),
+    answer("ard_missing()"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "A SAS programmer writes `PROC MEANS N MEAN STD;`. What is the equivalent in `ard_continuous()`?",
+    answer("denominator = c(\"N\", \"mean\", \"sd\")"),
+    answer("statistic = ~ list(\"N\", \"mean\", \"sd\")", correct = TRUE),
+    answer("by = c(\"N\", \"mean\", \"sd\")"),
+    answer("value = list(\"N\", \"mean\", \"sd\")"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "You pass `variables = c(AGE, BMIBL)` to `ard_continuous()`. What happens?",
+    answer("The function errors because it accepts only one variable at a time."),
+    answer("The function produces one block of rows per variable in the same standard ARD schema.", correct = TRUE),
+    answer("Only AGE is summarized; BMIBL is silently dropped."),
+    answer("AGE and BMIBL are averaged together before summarization."),
+    allow_retry = TRUE
   )
 )
 ```
@@ -192,9 +662,15 @@ quiz(
 ## Chapter 2 Summary {.congratulations}
 
 You now know how to:
-- Generate summaries for continuous variables using **`ard_continuous()`**.
-- Compute categorical frequency tables using **`ard_categorical()`**.
-- Extract positive response flags using **`ard_dichotomous()`**.
-- Perform grouped analysis across all functions via the uniform **`by`** argument.
 
-**Next:** Chapter 3 — Stacking and Formatting (`bind_ard`, `ard_fmt_args`, etc.)
+- Pick the right `{cards}` function for each data type and clinical question.
+- Generate continuous summaries with **`ard_continuous()`** — including customizing the list of statistics via the `statistic` argument.
+- Compute categorical frequencies with **`ard_categorical()`** — and pick the correct denominator (`"column"`, `"row"`, `"cell"`).
+- Extract a single positive flag level with **`ard_dichotomous()`** using the `value` argument.
+- Build dedicated missingness rows with **`ard_missing()`**.
+- Produce header denominator rows with **`ard_total_n()`** — the numbers that feed `(N=…)` in column headers.
+- Group calculations across one or more stratification variables via the **`by`** argument.
+- Summarize multiple analysis variables in a single call by passing a vector to `variables`.
+- See how every `{cards}` call returns the same standard ARD schema, ready to be stacked with `bind_rows()` into a single dataset that drives a complete table layout.
+
+**Next:** Chapter 3 — Stacking and Formatting (`bind_ard`, `ard_fmt_args`, etc.) — turning the pile of ARDs you just learned to produce into one polished, display-ready dataset.
