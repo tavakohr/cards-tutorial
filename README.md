@@ -2,7 +2,7 @@
 
 > Hands-on **learnr** tutorial covering `{cards}` and `{cardx}` R packages — from basic continuous/categorical summaries to regression modeling with `{broom}` and `{parameters}`, with live exercises on real **pharmaverse** datasets.
 
-An eight-chapter interactive course that takes a clinical R programmer from "what is Analysis Results Data (ARD)?" all the way to writing custom statistics, handling model tidying, and mapping flat ARD records directly to the CDISC ARS JSON schema.
+A ten-chapter interactive course that takes a clinical R programmer from "what is Analysis Results Data (ARD)?" all the way to writing custom statistics, handling model tidying, exporting MS Word deliverables, and mapping flat ARD records directly to the CDISC ARS JSON schema.
 
 Every chapter mixes narrative theory with **runnable code exercises** (graded with `{gradethis}`) and **knowledge-check quizzes**. All exercises use real pharmaverse ADaM datasets (`adsl`, `adtte`) and a sample ARD JSON file (`data/adsl_demog_ard.json`).
 
@@ -18,16 +18,18 @@ Every chapter mixes narrative theory with **runnable code exercises** (graded wi
 
 ## Chapter Overview
 
-| # | Chapter | What you learn / build |
-|---|---------|------------------------|
-| 1 | [Intro to ARD and `{cards}`](cards_tutorial_ch1.Rmd) | The concept of Analysis Results Data (ARD); unrounded raw values vs formatted values; standard ARD schema. |
-| 2 | [Core `{cards}` Operations](cards_tutorial_ch2.Rmd) | Generating statistics for continuous, categorical, and dichotomous variables, plus denominators (N) and missingness. |
-| 3 | [Stacking and Formatting](cards_tutorial_ch3.Rmd) | Combining multiple ARD tables using `bind_ard()` or `ard_stack()`; resolving duplicate rows; applying custom decimal formatting. |
-| 4 | [Extended Stats with `{cardx}`](cards_tutorial_ch4.Rmd) | Generating ARDs for hypothesis tests (t-tests, Fisher's exact, CMH) and Kaplan-Meier survival analysis. |
-| 5 | [Models, `{broom}`, and `{parameters}`](cards_tutorial_ch5.Rmd) | Slicing complex R model objects; the roles of `{broom}` and `{parameters}`; generating regression ARDs with `ard_regression()`. |
-| 6 | [Consuming ARD](cards_tutorial_ch6.Rmd) | Passing pre-calculated ARDs to downstream rendering tools like `{gtsummary}` (`tbl_ard_summary()`) and `{rtables}`. |
-| 7 | [Exporting and MS Word Styling](cards_tutorial_ch7.Rmd) | Bridging gtsummary to MS Word using flextable and officer; managing clinical page layouts, margins, and headers. |
-| 8 | [Advanced Workflows](cards_tutorial_ch8.Rmd) | Implementing custom statistics (geometric mean/CV); mapping flat ARD columns directly to CDISC ARS `OperationResult` structures. |
+| #  | Chapter | What you learn / build |
+|----|---------|------------------------|
+| 01 | [Intro to ARD and `{cards}`](cards_tutorial_ch01.Rmd) | The concept of Analysis Results Data (ARD); unrounded raw values vs formatted values; standard ARD schema. |
+| 02 | [Core `{cards}` Operations](cards_tutorial_ch02.Rmd) | Generating statistics for continuous, categorical, and dichotomous variables, plus denominators (N) and missingness. |
+| 03 | [Stacking and Formatting](cards_tutorial_ch03.Rmd) | Combining multiple ARD tables using `bind_ard()` or `ard_stack()`; resolving duplicate rows; applying custom decimal formatting. |
+| 04 | [Extended Stats with `{cardx}`](cards_tutorial_ch04.Rmd) | Generating ARDs for hypothesis tests (t-tests, Fisher's exact, CMH) and Kaplan-Meier survival analysis. |
+| 05 | [Models, `{broom}`, and `{parameters}`](cards_tutorial_ch05.Rmd) | Slicing complex R model objects; the roles of `{broom}` and `{parameters}`; generating regression ARDs with `ard_regression()`. |
+| 06 | [Consuming ARD](cards_tutorial_ch06.Rmd) | Passing pre-calculated ARDs to downstream rendering tools like `{gtsummary}` (`tbl_ard_summary()`) and `{rtables}`. |
+| 07 | [Exporting and MS Word Styling](cards_tutorial_ch07.Rmd) | Bridging gtsummary to MS Word using flextable and officer; managing clinical page layouts, margins, and headers. |
+| 08 | [Advanced Workflows](cards_tutorial_ch08.Rmd) | Implementing custom statistics (geometric mean/CV); mapping flat ARD columns directly to CDISC ARS `OperationResult` structures. |
+| 09 | [ARD Structure Reference](cards_tutorial_ch09.Rmd) | Standing reference for the full ARD column layout, list-columns, and the ARD → SAS ODS output mapping. |
+| 10 | [Broom vs. Parameters Tidiers](cards_tutorial_ch10.Rmd) | Side-by-side comparison of `{broom}` and `{parameters}`; the reference-row problem; `{broom.helpers}` as the Rosetta Stone; overriding `tidy_fun` in `ard_regression()`. |
 
 The original chapter study materials live in [`materials/`](materials/).
 
@@ -77,7 +79,7 @@ remotes::install_github("pharmaverse/pharmaverseadam")
 In R:
 
 ```r
-rmarkdown::run("cards_tutorial_ch1.Rmd")
+rmarkdown::run("cards_tutorial_ch01.Rmd")
 ```
 
 Or in RStudio: open any `cards_tutorial_ch*.Rmd` and click **"Run Document"** in the editor toolbar.
@@ -90,13 +92,16 @@ Each chapter opens in your browser as a self-contained interactive tutorial with
 
 ```
 cards_tutorial/
-├── cards_tutorial_ch1.Rmd      ← Chapter 1: Intro to ARD and cards
-├── cards_tutorial_ch2.Rmd      ← Chapter 2: Core cards Operations
-├── cards_tutorial_ch3.Rmd      ← Chapter 3: Stacking and Formatting
-├── cards_tutorial_ch4.Rmd      ← Chapter 4: Extended Stats with cardx
-├── cards_tutorial_ch5.Rmd      ← Chapter 5: Models, broom, and parameters
-├── cards_tutorial_ch7.Rmd      ← Chapter 7: Exporting and MS Word Styling
-├── cards_tutorial_ch8.Rmd      ← Chapter 8: Advanced Workflows
+├── cards_tutorial_ch01.Rmd     ← Chapter 1: Intro to ARD and cards
+├── cards_tutorial_ch02.Rmd     ← Chapter 2: Core cards Operations
+├── cards_tutorial_ch03.Rmd     ← Chapter 3: Stacking and Formatting
+├── cards_tutorial_ch04.Rmd     ← Chapter 4: Extended Stats with cardx
+├── cards_tutorial_ch05.Rmd     ← Chapter 5: Models, broom, and parameters
+├── cards_tutorial_ch06.Rmd     ← Chapter 6: Consuming ARD with gtsummary
+├── cards_tutorial_ch07.Rmd     ← Chapter 7: Exporting and MS Word Styling
+├── cards_tutorial_ch08.Rmd     ← Chapter 8: Advanced Workflows
+├── cards_tutorial_ch09.Rmd     ← Chapter 9: ARD Structure Reference
+├── cards_tutorial_ch10.Rmd     ← Chapter 10: Broom vs. Parameters Tidiers
 │
 ├── data/
 │   └── adsl_demog_ard.json     ← Sample flat ARD JSON

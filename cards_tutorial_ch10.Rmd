@@ -3,7 +3,7 @@ title: "cards & cardx R Packages — Interactive Training"
 subtitle: "Chapter 10: Broom vs. Parameters Tidiers"
 author: "Hamid Tavakoli, MD, MSc"
 tutorial:
-  version: 1.1
+  version: 1.2
 output:
   learnr::tutorial:
     progressive: true
@@ -11,7 +11,10 @@ output:
     css: www/custom.css
 runtime: shiny_prerendered
 description: >
-  Understand how R translates complex model objects into clean datasets using model tidiers, and how cardx standardizes these outputs.
+  Compare the two dominant model-tidier ecosystems in R — broom and parameters —
+  understand their column-naming conflict, see why reference rows go missing,
+  and learn how broom.helpers and cardx::ard_regression bridge the gap for
+  clinical reporting.
 ---
 
 ```{r setup, include=FALSE}
@@ -33,198 +36,748 @@ gradethis_setup()
 # Load datasets
 data("adsl",  package = "pharmaverseadam")
 
-# Pre-fit a logistic regression model for the exercises
-# Predicting Safety Population inclusion (SAFFL == "Y") based on Treatment Arm and Age
+# Pre-fit a logistic regression model used across exercises
+# Predicting Safety Population inclusion (SAFFL == "Y") from treatment arm and age.
+# Placebo is the reference level of TRT01A.
 adsl_model_data <- adsl %>%
   filter(!is.na(TRT01A), !is.na(AGE)) %>%
-  mutate(RESP_BIN = ifelse(SAFFL == "Y", 1, 0))
+  mutate(
+    RESP_BIN = ifelse(SAFFL == "Y", 1L, 0L),
+    TRT01A   = factor(TRT01A,
+                      levels = c("Placebo",
+                                 "Xanomeline Low Dose",
+                                 "Xanomeline High Dose"))
+  )
 
-model_fit <- glm(RESP_BIN ~ TRT01A + AGE, data = adsl_model_data, family = binomial)
+model_fit <- glm(
+  RESP_BIN ~ TRT01A + AGE,
+  data   = adsl_model_data,
+  family = binomial
+)
 ```
 
 ---
 
-## 10.1 Introduction to Tidiers vs. SAS ODS
+## Chapter 10: Broom vs. Parameters Tidiers
 
-In SAS, when you run a statistical procedure like `PROC LOGISTIC`, the math happens in the background, and the results are automatically printed to the screen. To save those results into a dataset, you use the Output Delivery System (ODS):
+### 10.1 Why This Chapter Exists — The Tidier Crossroads
 
-```sas
-ods output ParameterEstimates = my_estimates;
-proc logistic data=adsl;
-  class TRT01A / param=ref;
-  model RESP_BIN(event='1') = TRT01A AGE;
-run;
+Chapter 5 introduced the four-layer pipeline that lets `{cards}` turn a fitted model into an ARD: `broom::tidy()` extracts the math, `broom.helpers::tidy_plus_plus()` enriches it, `cardx::ard_regression()` casts it into the ARD schema, and a downstream tool renders the table.
+
+That chapter took `broom.helpers` as a given and showed you the result. This chapter zooms in on the most consequential choice inside that pipeline: **which tidier do you actually run, and why does it matter?**
+
+There are two competing tidier ecosystems in R, and they were built by different people with different goals:
+
+```
+            +-----------------------------+        +-----------------------------+
+            |   {broom}                   |        |   {parameters} (easystats)  |
+            |                             |        |                             |
+            |  - oldest                   |        |  - newer                    |
+            |  - minimalist               |        |  - reporting-oriented       |
+            |  - tidymodels heritage      |        |  - rich metadata            |
+            |  - drops reference rows     |        |  - keeps reference rows     |
+            |  - uses term, estimate, ... |        |  - uses Parameter, Coefficient, ... |
+            +--------------+--------------+        +---------------+-------------+
+                           |                                       |
+                           |       SAME fitted model object        |
+                           +-------------------+-------------------+
+                                               |
+                                               v
+                                  TWO DIFFERENT DATA FRAMES
 ```
 
-In R, things work differently. A modeling function like `glm()` returns a **complex model object**. This object is essentially a massive, nested list containing the coefficients, residuals, gradients, and model frame. It is *not* a flat data frame.
+A clinical reporting workflow can survive on either one, but only if you understand the trade-offs. Picking the wrong default leads to two real-world consequences:
 
-To get the equivalent of `ParameterEstimates`, R uses **"tidier" functions**. A tidier takes the messy, nested model object and extracts the statistics into a clean, flat data frame (a tibble). 
+- **A missing Placebo row** in your odds-ratio table, because `broom` silently dropped it.
+- **A regulator's QC script that cannot find your `estimate` column**, because you accidentally shipped `parameters`-style column names.
 
-The two most prominent packages for this in R are `{broom}` and `{parameters}`.
+The fix is to layer the two ecosystems together through `{broom.helpers}` — a "Rosetta Stone" package that converts between the two vocabularies *and* reinjects the missing reference rows. This chapter walks through every piece of that translation.
 
----
-
-## 10.2 The Column Mapping Problem
-
-Just as different SAS PROCs might use slightly different column names in their ODS outputs (e.g., `Estimate` vs `Coefficient`, or `ProbChiSq` vs `Probt`), `{broom}` and `{parameters}` use different naming conventions.
-
-When standardizing output for the ARD structure, `{broom.helpers}` and `{cardx}` strictly adopt the `{broom}` convention. Here is the translation dictionary:
-
-| Concept | `{broom}::tidy()` Column | `{parameters}::model_parameters()` Column | Standardized ARD Output |
-|:---|:---|:---|:---|
-| Coefficient Name | `term` | `Parameter` | `term` |
-| Point Estimate | `estimate` | `Coefficient` | `estimate` |
-| Standard Error | `std.error` | `SE` | `std.error` |
-| Test Statistic | `statistic` | `z` | `statistic` |
-| p-value | `p.value` | `p` | `p.value` |
-| Conf. Int. (Low)| `conf.low` | `CI_low` | `conf.low` |
-| Conf. Int. (High)| `conf.high` | `CI_high` | `conf.high` |
+> **Note on overlap with Chapter 5:** Chapter 5 shows you the *pipeline*. This chapter is the *comparison drill*. Each section here pairs the two tidiers on identical input and explains every difference column by column.
 
 ---
 
-## 10.3 Key Differences: broom vs parameters
+### 10.2 SAS Programmer's Quick Map
 
-While both packages do the exact same job (extracting coefficients), they have wildly different philosophies on how to present the data, particularly regarding categorical variables.
+If your reflex is to write `ODS OUTPUT ParameterEstimates = est;` after a `PROC LOGISTIC` call, here is the dictionary that maps every part of that workflow into R.
 
-### The Problem with `{broom}`
-`{broom}` is minimalist. If a coefficient isn't mathematically calculated by the model engine, `{broom}` will not output a row for it.
-For a categorical variable with three levels (Placebo, Low Dose, High Dose), the model only estimates coefficients for Low Dose and High Dose. The Placebo group is the **reference level** (its effect is absorbed into the Intercept, so mathematically its coefficient is 0, or Odds Ratio = 1).
-**Therefore, `{broom}` completely drops the Placebo row.**
+| SAS construct                                                  | R / `{cards}` equivalent                                          | Note                                                               |
+|----------------------------------------------------------------|-------------------------------------------------------------------|--------------------------------------------------------------------|
+| `PROC LOGISTIC; MODEL y = x;`                                  | `glm(y ~ x, family = binomial, data = ...)`                       | The model fit object holds everything.                              |
+| `ODS OUTPUT ParameterEstimates = est;`                         | `broom::tidy(fit)`                                                | One row per estimated coefficient.                                  |
+| `ODS OUTPUT FitStatistics = fit;`                              | `broom::glance(fit)`                                              | One row per model — AIC, BIC, deviance.                             |
+| `OUTPUT OUT=pred PRED=p RESID=r;`                              | `broom::augment(fit)`                                             | Adds per-observation predicted/residual columns.                    |
+| `ODS OUTPUT OddsRatios = or;`                                  | `broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE)`          | Tidy with `exponentiate = TRUE`.                                     |
+| Reference class row in PROC LOGISTIC `Class Level Information` | `tidy_plus_plus()` reference-row reinjection                      | SAS prints the reference automatically; `broom::tidy()` does not.   |
+| `LABEL TRT01A = "Treatment Arm";`                              | `broom.helpers` reads `label()` attributes                        | Variable labels survive into the tidied frame.                       |
+| `PROC FORMAT VALUE` applied for the displayed cell             | `cardx::ard_regression()` + `fmt_fun`                             | Format lives next to raw value (as everywhere in `{cards}`).         |
+| Multiple ODS datasets stitched together by hand                | `cardx::ard_regression()` returns one ARD covering everything     | The four ODS outputs become rows of one ARD.                         |
+| `OPTIONS NOFMTERR;`                                            | n/a                                                               | No format errors in R — numeric values are not coupled to formats.   |
+| Manually adding "Reference" row via `DATA STEP`                | `tidy_plus_plus(add_reference_rows = TRUE)` (default)             | Automated.                                                           |
 
-For clinical programmers, this is a nightmare. Clinical TLFs (Tables, Listings, Figures) absolutely require the reference row to be displayed (e.g., displaying `1.00 (Reference)` in the Odds Ratio column).
-
-### The Power of `{parameters}`
-The `{parameters}` package is built for reporting. It is capable of intelligently injecting those missing reference rows back into the data frame, populating them with `0` (or `1` if exponentiated) and `NA` for p-values.
+**Key mental shift:** in SAS, every PROC writes a *fixed* set of ODS datasets with *fixed* column names. In R, *which* function you call to tidy determines both the column names and which rows appear. The "ODS OUTPUT" step is no longer hidden inside the procedure; it is an explicit, swappable function call.
 
 ---
 
-## Exercise 10.3 — Visualizing the Missing Reference Row
+### 10.3 The Two Tidier Ecosystems, Side by Side
 
-We have pre-fit a logistic regression model (`model_fit`) predicting response by `TRT01A` and `AGE`. `TRT01A` has three levels: Placebo, Xanomeline Low Dose, and Xanomeline High Dose. Placebo is the reference.
+`{broom}` and `{parameters}` are both wrappers around the same fitted model object. Both ultimately call methods like `coef(fit)`, `vcov(fit)`, and `confint(fit)`. What they differ on is *how* they package the result.
 
-Let's use the standard `broom::tidy()` function to extract the coefficients and observe the missing reference row.
+```
+                          +------------------+
+                          |  fitted model    |
+                          |   (glm, lm, ...) |
+                          +--------+---------+
+                                   |
+              +--------------------+---------------------+
+              |                                          |
+              v                                          v
+   +----------------------+                  +-----------------------------+
+   | broom::tidy(fit)     |                  | parameters::model_parameters|
+   +----------------------+                  +-----------------------------+
+   columns:                                  columns:
+   - term                                    - Parameter
+   - estimate                                - Coefficient
+   - std.error                               - SE
+   - statistic                               - z (or t)
+   - p.value                                 - p
+   - conf.low, conf.high                     - CI_low, CI_high
+                                             - df_error, Effects, Component
+   rows: ONLY estimated coefficients         rows: estimated + reference + random structure
+   philosophy: minimalist, programmatic      philosophy: reporting-ready, human-friendly
+```
 
-```{r ch10-ex3, exercise=TRUE, exercise.lines=10}
-# Extract coefficients using broom::tidy
-tidy_broom <- broom::tidy(model_fit)
+A few practical consequences fall out of the diagram:
 
-# View the term and estimate columns
+- Code written against `broom` will *break* if you feed it the output of `parameters`, because the column names differ. The opposite is also true.
+- `parameters` includes a richer set of model-structure rows (random effects, interaction components) that downstream layout tools sometimes do not want.
+- `broom` is the dominant choice in the tidymodels universe; `parameters` is the dominant choice in the easystats universe. Both ecosystems are large.
+
+`{cards}` resolves the conflict by *standardizing on the `broom` vocabulary* and using `{broom.helpers}` to fill the gaps that `broom` alone leaves behind (reference rows, variable labels). The reasoning is pragmatic: `broom` shipped first, has wider adoption, and matches the column names that `cardx` internals expect.
+
+> **SAS analog:** picking between `broom` and `parameters` is roughly like picking between two SAS macros that both wrap `PROC LOGISTIC` but produce different output dataset structures. The math is the same; the column dictionary differs.
+
+---
+
+### 10.4 The Column-Naming Dictionary
+
+Memorize this once and you can translate any tidier example from a blog post on the fly. Every cell of the table refers to the *same number* — the difference is the column name.
+
+| Concept                       | `broom::tidy()` column | `parameters::model_parameters()` column | ARD `stat_name` after `ard_regression()` |
+|-------------------------------|------------------------|-----------------------------------------|-------------------------------------------|
+| Coefficient name              | `term`                 | `Parameter`                             | `term`                                    |
+| Point estimate                | `estimate`             | `Coefficient`                           | `estimate`                                |
+| Standard error                | `std.error`            | `SE`                                    | `std.error`                               |
+| Test statistic (z / t / chi)  | `statistic`            | `z` (logistic) / `t` (linear)           | `statistic`                               |
+| p-value                       | `p.value`              | `p`                                     | `p.value`                                 |
+| Confidence interval, lower    | `conf.low`             | `CI_low`                                | `conf.low`                                |
+| Confidence interval, upper    | `conf.high`            | `CI_high`                               | `conf.high`                               |
+| Degrees of freedom            | `df`                   | `df_error`                              | `df`                                      |
+| Effect family (fixed/random)  | n/a                    | `Effects`                               | n/a                                       |
+| Model component               | n/a                    | `Component`                             | n/a                                       |
+
+The last two rows show the metadata that `parameters` adds but `broom` omits. Random-effect and component columns matter for mixed models (`lmer`, `glmer`) — those models often need the extra metadata, which is why a programmer working with multilevel models may prefer `parameters` upstream of `broom.helpers`.
+
+> **SAS analog:** the `Parameter`, `Estimate`, `StdErr`, `WaldChiSq`, `ProbChiSq` columns inside `PROC LOGISTIC`'s `ParameterEstimates` ODS dataset map to `broom`'s `term`, `estimate`, `std.error`, `statistic`, `p.value`. The mapping is direct.
+
+---
+
+### 10.5 `broom::tidy()` — What You Get and Why a Row Goes Missing
+
+Run `broom::tidy()` on a logistic regression with a three-level categorical predictor (`Placebo`, `Xanomeline Low Dose`, `Xanomeline High Dose`) and you will get **four rows**, not five:
+
+```
+   term                            estimate    std.error   statistic   p.value
+   ------------------------------  ----------  ----------  ----------  --------
+   (Intercept)                       2.31         0.78       2.96       0.003
+   TRT01AXanomeline Low Dose         0.04         0.35       0.11       0.913
+   TRT01AXanomeline High Dose       -0.18         0.34      -0.53       0.598
+   AGE                              -0.01         0.01      -1.20       0.230
+```
+
+Notice three things:
+
+- There is no row for `Placebo`. Mathematically, its coefficient is *defined to be zero* (the reference level is folded into the intercept), so `broom::tidy()` does not emit it. From `broom`'s point of view, no number was estimated; no row appears.
+- The non-reference levels appear concatenated to the variable name: `TRT01AXanomeline Low Dose`. The factor-level boundary is not parsed out.
+- The intercept is included as just another row. SAS would label it `Intercept`; R labels it `(Intercept)` with parentheses.
+
+For a clinical Odds Ratio table you typically *need*:
+
+```
+                                   Odds Ratio   95% CI         p-value
+   Placebo                            1.00      (Reference)    —
+   Xanomeline Low Dose                1.04      (0.52, 2.08)   0.913
+   Xanomeline High Dose               0.84      (0.43, 1.62)   0.598
+```
+
+The Placebo row is required, the `(Reference)` text is required, and the factor-level cleanup is required. None of that comes out of `broom::tidy()` alone.
+
+> **SAS analog:** `PROC LOGISTIC`'s default output *does* show the reference class in the `Class Level Information` table and reinforces it in the `OddsRatios` table. SAS does this for you; `broom::tidy()` does not.
+
+---
+
+### 10.6 `parameters::model_parameters()` — Reference Rows for Free
+
+The same model fed to `parameters::model_parameters()` produces:
+
+```
+   Parameter                       Coefficient   SE      z         p       CI_low   CI_high
+   ------------------------------  -----------   ------  --------  ------  -------  -------
+   (Intercept)                        2.31        0.78    2.96     0.003     0.78     3.84
+   TRT01A [Xanomeline Low Dose]       0.04        0.35    0.11     0.913    -0.65     0.73
+   TRT01A [Xanomeline High Dose]     -0.18        0.34   -0.53     0.598    -0.85     0.49
+   AGE                               -0.01        0.01   -1.20     0.230    -0.03     0.01
+```
+
+Differences from `broom`:
+
+- Column names follow PascalCase / mixed-case conventions, not snake_case.
+- The factor variable name and its level are *separated by spaces and square brackets*: `TRT01A [Xanomeline Low Dose]` instead of `TRT01AXanomeline Low Dose`. This is a small thing that turns out to matter a lot when downstream code needs to parse the term back into variable + level.
+- `parameters` also defaults to including confidence intervals (`broom` does not, unless you set `conf.int = TRUE`).
+
+Still missing in the default call: the reference row for `Placebo`. By default `parameters::model_parameters()` also drops it. To get it, you need `parameters::model_parameters(..., keep_reference = TRUE)`.
+
+> **The honest take:** neither tidier alone gives a clinical-table-ready output. Both need an extra step to reinject the reference row. `broom.helpers::tidy_plus_plus()` is the package that bakes that extra step in by default — and that is why `{cardx}` chose it as the foundation of `ard_regression()`.
+
+---
+
+### 10.7 Side-by-Side on the Same Model
+
+To make the differences concrete, here is the same fit pushed through both tidiers and the columns lined up.
+
+```
+   broom::tidy()                          parameters::model_parameters()
+
+   term                                   Parameter
+   estimate                               Coefficient
+   std.error                              SE
+   statistic                              z
+   p.value                                p
+   conf.low      (if conf.int = TRUE)     CI_low                     (by default)
+   conf.high     (if conf.int = TRUE)     CI_high                    (by default)
+   ---                                    Effects                    (fixed/random tag)
+   ---                                    Component                  (which equation in a mixed model)
+   ---                                    df_error                   (residual df)
+```
+
+There is no row that `broom` *adds* over `parameters`; the relationship is strictly that `parameters` is a superset of metadata. The only thing `broom` does that `parameters` does not is keep column names short and snake_case — which matters when downstream code needs to write `df$estimate` instead of `df$Coefficient`.
+
+---
+
+## Exercise 10.1 — Run `broom::tidy()` and See the Missing Reference Row
+
+Tidy the pre-fit `model_fit` with `broom::tidy()`. Confirm by inspection that there is *no* `Placebo` row in the output. The fix is the next section's job; right now you just need to see the problem.
+
+```{r ch10-ex1, exercise=TRUE, exercise.lines=8}
+# Tidy the logistic model with broom
+tidy_broom <- broom::___(model_fit)
+
+# Show the term, estimate, and p.value columns
 tidy_broom %>%
   select(term, estimate, p.value)
+```
+
+```{r ch10-ex1-hint-1}
+# The function is broom::tidy
+```
+
+```{r ch10-ex1-solution}
+tidy_broom <- broom::tidy(model_fit)
+tidy_broom %>%
+  select(term, estimate, p.value)
+```
+
+```{r ch10-ex1-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && all(c("term", "estimate", "p.value") %in% names(.result)) && !any(grepl("Placebo", .result$term)), "Correct. broom::tidy() returns one row per estimated coefficient and silently omits the reference level (Placebo). This is the gap that {broom.helpers} fills."),
+  fail_if(~ TRUE, "Call broom::tidy(model_fit), then select term, estimate, and p.value.")
+)
+```
+
+> **Read the output:** none of the `term` strings contains the word `Placebo`. The reference row is not "filtered out" — it never existed in the first place, because `broom` only outputs rows for which the model actually estimated a number.
+
+---
+
+## Exercise 10.2 — Run `parameters::model_parameters()` and Spot the Column-Name Differences
+
+Tidy the same model with `parameters::model_parameters()`. Compare the column names to what `broom::tidy()` produced.
+
+```{r ch10-ex2, exercise=TRUE, exercise.lines=10}
+# Tidy the logistic model with parameters
+tidy_param <- parameters::model_parameters(model_fit)
+
+# Look at the column names returned
+names(tidy_param)
+```
+
+```{r ch10-ex2-hint-1}
+# Call names(tidy_param) on the parameters output.
+```
+
+```{r ch10-ex2-solution}
+tidy_param <- parameters::model_parameters(model_fit)
+names(tidy_param)
+```
+
+```{r ch10-ex2-check}
+grade_result(
+  pass_if(~ is.character(.result) && "Parameter" %in% .result && "Coefficient" %in% .result, "Correct. parameters::model_parameters() uses `Parameter` and `Coefficient` (PascalCase) where broom uses `term` and `estimate` (snake_case). Same numbers, different vocabulary."),
+  fail_if(~ TRUE, "Pass the parameters output to names() to print the column names.")
+)
+```
+
+> **Why this matters:** if you write `tidy_df$estimate` you get the broom column; on the parameters output that expression returns `NULL` and your downstream code silently produces wrong values. The column-name discipline is a real source of bugs.
+
+---
+
+### 10.8 The Reference Row Problem in Detail
+
+A clinical Odds Ratio table needs to *show* the reference level with an OR of 1.00 (or estimate 0 on the log scale). The reasons are part regulatory expectation and part reader friendliness — the human eye needs to see "Placebo: 1.00" to understand what the other rows are being compared against.
+
+Two facts conspire to make this hard:
+
+1. **R's model engine never computes a number for the reference level.** It is the *baseline*; its effect is the intercept. Mathematically, the coefficient is exactly zero.
+2. **`broom::tidy()` only emits rows for computed numbers.** Honoring fact (1), `broom` leaves the reference level out.
+
+The result is a tidied data frame that is *mathematically faithful* but *clinically incomplete*. Three remedies exist:
+
+- **Use `parameters::model_parameters(keep_reference = TRUE)`.** Works, but locks you into the `parameters` column-name dictionary.
+- **Manually patch the row.** Possible but brittle: you have to compute the level name, set `estimate = 0` (or `1` if exponentiated), set the CI bounds appropriately, decide what `p.value` should be (typically `NA`), and remember to do this for every categorical variable in the model.
+- **Use `broom.helpers::tidy_plus_plus()`.** Adds the reference row automatically, in the `broom` column dictionary, with `estimate = 0` and a sentinel `reference_row = TRUE` flag.
+
+Option three is what `{cardx}` ships with. It is also the only one of the three that scales painlessly to models with several categorical predictors.
+
+```
+   GAP IN broom::tidy() OUTPUT      WHAT tidy_plus_plus() ADDS
+
+   +-------------------------+      +---------------------------+
+   | term                    |      | TRT01A: Placebo           |
+   | TRT01AXanomeline Low... |  --> | TRT01A: Xanomeline Low... |
+   | TRT01AXanomeline High.. |      | TRT01A: Xanomeline High.. |
+   | (Intercept)             |      |                           |
+   | AGE                     |      | reference_row column = T  |
+   +-------------------------+      | label column = "Placebo"  |
+                                    | variable column = "TRT01A"|
+                                    +---------------------------+
+```
+
+---
+
+### 10.9 `broom.helpers::tidy_plus_plus()` — The Rosetta Stone
+
+`tidy_plus_plus()` is the single most important function in the clinical R reporting ecosystem. It is a thin-looking call that does five non-trivial jobs:
+
+```r
+broom.helpers::tidy_plus_plus(
+  x                 = model_fit,
+  exponentiate      = FALSE,       # set TRUE for ORs/HRs
+  conf.int          = TRUE,
+  conf.level        = 0.95,
+  add_reference_rows = TRUE,       # the reinjection magic
+  add_estimate_to_reference_rows = TRUE,
+  tidy_fun          = NULL         # which tidier to wrap (default: broom::tidy)
+)
+```
+
+The output uses `broom`'s column names *plus* a few additional columns specific to clinical tables:
+
+| Added column        | Meaning                                                      |
+|---------------------|--------------------------------------------------------------|
+| `variable`          | The raw variable name as it appears in the model formula (e.g., `TRT01A`). |
+| `var_class`         | The data class — `factor`, `numeric`, etc.                   |
+| `var_type`          | `categorical` or `continuous`.                               |
+| `label`             | The variable label (from a `label()` attribute, if present). |
+| `var_label`         | Same idea, top-level variable label.                          |
+| `contrasts`         | The contrast type used for categorical encoding.              |
+| `reference_row`     | `TRUE` for the synthetically-added reference rows.            |
+| `term`              | The raw term string from `broom::tidy()` for non-reference rows; constructed for reference rows. |
+
+That `reference_row` flag is the hook that downstream layout tools use to print `1.00 (Reference)` instead of running the formatter on the raw estimate.
+
+> **SAS analog:** `tidy_plus_plus()` is like a SAS macro that takes `ODS OUTPUT ParameterEstimates`, joins it with `PROC CONTENTS` to recover variable labels, joins it again with the class-level table to recover the reference row, and outputs a single unified dataset. SAS programmers usually write this macro themselves once per organisation; `broom.helpers` ships it as a package.
+
+---
+
+## Exercise 10.3 — Reinject the Reference Row with `tidy_plus_plus()`
+
+Run the same `model_fit` through `broom.helpers::tidy_plus_plus()` and confirm that a row for `Placebo` appears with `reference_row == TRUE`.
+
+```{r ch10-ex3, exercise=TRUE, exercise.lines=10}
+# Tidy with broom.helpers — the reference row should reappear
+tidy_helpers <- broom.helpers::tidy_plus_plus(model_fit)
+
+# Show variable, label, reference_row, and estimate
+tidy_helpers %>%
+  select(variable, label, reference_row, estimate) %>%
+  filter(variable == "___")
+```
+
+```{r ch10-ex3-hint-1}
+# Filter on variable == "TRT01A" to focus on the treatment arm rows.
 ```
 
 ```{r ch10-ex3-solution}
-tidy_broom <- broom::tidy(model_fit)
-
-tidy_broom %>%
-  select(term, estimate, p.value)
+tidy_helpers <- broom.helpers::tidy_plus_plus(model_fit)
+tidy_helpers %>%
+  select(variable, label, reference_row, estimate) %>%
+  filter(variable == "TRT01A")
 ```
 
 ```{r ch10-ex3-check}
 grade_result(
-  pass_if(~ TRUE, "Notice that 'Placebo' is nowhere to be found! Only the Low Dose and High Dose terms appear."),
-  fail_if(~ FALSE, "")
+  pass_if(~ is.data.frame(.result) && any(.result$reference_row, na.rm = TRUE) && any(grepl("Placebo", .result$label)), "Correct. tidy_plus_plus() rebuilt the Placebo row, tagged it with reference_row = TRUE, and gave it estimate = 0 (which exponentiates to OR = 1)."),
+  fail_if(~ TRUE, "Filter on variable == 'TRT01A' so you can see all three treatment levels including the reinjected Placebo reference row.")
 )
 ```
 
----
-
-## 10.4 broom.helpers: The Rosetta Stone
-
-We want the strict, predictable column names of `{broom}`, but we desperately need the reference rows and variable metadata provided by `{parameters}`. 
-
-Enter the **`{broom.helpers}`** package. 
-
-When you use `{cardx}` to build a regression ARD, it doesn't call `broom` directly. It calls `broom.helpers::tidy_plus_plus()`. This incredible wrapper function does several things simultaneously:
-1. It extracts the model math.
-2. It standardizes all column names to the `{broom}` convention.
-3. **It magically rebuilds and injects the reference rows.**
-4. It attaches the original variable labels from the dataset.
-
-Think of `{broom.helpers}` as a powerful SAS macro that cleans up your `ODS OUTPUT`, merges it with `PROC CONTENTS` to get labels, and inserts dummy rows for reference classes automatically.
+> **What the flag means downstream:** `{cardx::ard_regression()}` reads `reference_row == TRUE` and decides not to format the estimate as a number; instead it places the literal string "Reference" in the row's `stat_fmt`. That is why your final OR table reads `1.00 (Reference)` instead of `0.00 (CI: NA, NA)`.
 
 ---
 
-## Exercise 10.4 — Bringing Back the Reference Row
+### 10.10 Inside `tidy_plus_plus()` — The Five Things It Adds
 
-Let's run the exact same model through `broom.helpers::tidy_plus_plus()`.
+Pull `tidy_plus_plus()` apart and you find five clinical-reporting features stacked on top of `broom::tidy()`:
 
-```{r ch10-ex4, exercise=TRUE, exercise.lines=10}
-# Extract coefficients using broom.helpers
-tidy_helpers <- broom.helpers::tidy_plus_plus(model_fit)
+| Feature                              | What it does                                                                          |
+|--------------------------------------|---------------------------------------------------------------------------------------|
+| 1. Reference-row injection           | Adds a row per dropped reference level with `estimate = 0` and `reference_row = TRUE`.|
+| 2. Variable-label recovery           | Reads `label()` attributes from the original data and stores them in `label`/`var_label`. |
+| 3. Term parsing                       | Splits `TRT01AXanomeline Low Dose` into `variable = TRT01A`, `label = Xanomeline Low Dose`. |
+| 4. Contrast metadata                  | Records which contrast (treatment, sum, helmert) was used to encode the factor.        |
+| 5. Optional exponentiation            | Applies `exp()` to estimate and CI bounds in one consistent step (no manual `exp()`). |
 
-# Select the variable, label, and reference_row indicator
-tidy_helpers %>%
-  select(variable, label, reference_row, estimate)
+Each of these maps to a manual step a SAS programmer might write in a data step after `ODS OUTPUT`. The package collapses them into one call.
+
+#### 10.10.1 Reading variable labels
+
+If your input data carries variable labels (set with `attr(data$AGE, "label") <- "Age, years"` or via the `{labelled}` package), `tidy_plus_plus()` picks those up automatically:
+
+```r
+adsl_labeled <- adsl
+attr(adsl_labeled$AGE, "label")    <- "Age, years"
+attr(adsl_labeled$TRT01A, "label") <- "Treatment Arm"
+
+fit <- glm(RESP_BIN ~ TRT01A + AGE, data = adsl_labeled, family = binomial)
+broom.helpers::tidy_plus_plus(fit) %>%
+  select(variable, var_label, label)
+```
+
+The `var_label` column contains the top-level variable label; `label` contains the level-specific label (the factor level name, for categorical variables).
+
+> **SAS analog:** the equivalent of writing `LABEL TRT01A = "Treatment Arm";` in a data step and then running `PROC LOGISTIC`. SAS prints the label in the output PDF; `tidy_plus_plus()` makes it available as a column you can map to a row label in your final table.
+
+---
+
+### 10.11 Exponentiation — The Single Most Common Reporting Mistake
+
+A logistic regression coefficient is on the **log-odds** scale. A Cox regression coefficient is on the **log-hazard** scale. Neither of those is what a clinical reader expects to see; the reader wants the **Odds Ratio** or **Hazard Ratio** — the *exponentiated* value.
+
+Three ways to exponentiate exist, and only one of them is reliable:
+
+| Approach                                          | Outcome                                                                                  |
+|---------------------------------------------------|-------------------------------------------------------------------------------------------|
+| `exp(coef(fit))` after the fact                   | Exponentiates the point estimate but **not** the CI — silent inconsistency.               |
+| `broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE)` | Exponentiates estimate and CI together. Reliable.                                  |
+| `cardx::ard_regression(fit, exponentiate = TRUE)` | Same as above, packaged into the ARD shape. Recommended default.                          |
+
+The bug is so common that it has a name in QC circles: the *exp-the-estimate-only* bug. The point estimate ends up at, say, OR = 2.50, and the CI ends up reported as `(0.92, 1.10)` because the bounds were exponentiated separately or not at all. The mismatch is visually obvious to a careful reviewer but easy to miss in an auto-generated table.
+
+```
+   WRONG                                       RIGHT
+   exp(estimate)        = 2.50                 estimate     = 0.92      (log-odds)
+   CI lower             = 0.92                 conf.low     = 0.45
+   CI upper             = 1.10                 conf.high    = 1.65
+   "OR = 2.50, CI: (0.92, 1.10)" <-- wrong     exponentiate = TRUE
+                                               OR = 2.50, CI: (1.57, 5.20)
+```
+
+The fix is always the same: pass `exponentiate = TRUE` to the tidier (or to `ard_regression`), never to the post-hoc data step.
+
+> **SAS analog:** the difference between calling `EXP()` only on `Estimate` in a data step vs. asking `PROC LOGISTIC` for the `OddsRatios` table directly. SAS programmers learn this lesson the same way.
+
+---
+
+### 10.12 Confidence Intervals — Wald, Profile, and Robust
+
+The `conf.int` flag is binary — give me a CI or don't — but the *method* used to compute that CI varies by model class:
+
+| Model class             | Default CI method in `broom::tidy()`         | Method in `parameters::model_parameters()`   |
+|-------------------------|-----------------------------------------------|----------------------------------------------|
+| `lm`                    | Wald (normal approximation)                  | Wald                                          |
+| `glm`                    | Profile likelihood (`MASS::confint.glm`)     | Wald (faster, slightly less accurate)         |
+| `coxph`                 | Wald                                         | Wald                                          |
+| `lmer` / `glmer`        | Wald                                         | Wald or profile (configurable)                |
+| `geeglm`                | Wald with robust SE                          | Wald with robust SE                           |
+
+The defaults are not always identical, and for a logistic regression on a small sample the profile-likelihood CI from `broom` can differ noticeably from the Wald CI you would see from `parameters`. For a regulatory submission you should *state* which method you used and stick to it.
+
+To force a specific CI method through `cardx::ard_regression()`, pass a `tidy_fun` that has the method baked in:
+
+```r
+my_tidier <- function(x, ...) broom::tidy(x, conf.int = TRUE, conf.level = 0.95, ...)
+
+ard_reg <- cardx::ard_regression(model_fit, tidy_fun = my_tidier)
+```
+
+The `tidy_fun` argument is the seam that lets you take full control of the upstream tidier without losing the downstream `cardx` machinery.
+
+> **SAS analog:** in `PROC LOGISTIC`, `CLPARM=PL` requests profile-likelihood CIs and `CLPARM=WALD` requests Wald CIs. The R-side equivalent is choosing the tidier and its arguments.
+
+---
+
+### 10.13 Customizing the Tidier in `cardx::ard_regression()`
+
+`cardx::ard_regression()` defaults to `broom.helpers::tidy_plus_plus()`. You can override it with the `tidy_fun` argument when the default does not fit:
+
+```r
+# Default - clinical-style with reference rows
+ard_default <- cardx::ard_regression(model_fit)
+
+# Strict broom - no reference rows, no labels
+ard_basic   <- cardx::ard_regression(model_fit, tidy_fun = broom::tidy)
+
+# parameters-based - reference rows on, but column names get translated
+ard_param   <- cardx::ard_regression(
+  model_fit,
+  tidy_fun = function(x, ...) parameters::model_parameters(x, keep_reference = TRUE, ...)
+)
+```
+
+Three quick rules of thumb:
+
+- **Default** (`tidy_plus_plus`) is right for clinical OR / HR tables, demographics-adjacent regression rows, and any output that follows the standard "Reference: 1.00" convention.
+- **`broom::tidy`** is right for forest plots, exploratory model diagnostics, or any case where you do *not* want reference rows cluttering the data.
+- **`parameters::model_parameters`** is right when you need mixed-model metadata (random effects, components) that `broom` does not include — but expect to translate column names downstream.
+
+In `{cardx}` v0.x, there is also `ard_regression_basic()` which is shorthand for "use `broom::tidy` and skip enrichment." Its existence is a hint that the strict-`broom` path is a real, supported choice — not a fallback.
+
+> **SAS analog:** swapping `tidy_fun` is equivalent to choosing which ODS dataset(s) you collect from a PROC. `tidy_plus_plus` collects everything and joins it; `broom::tidy` collects just `ParameterEstimates`; `parameters` collects a parallel-universe version of the same content.
+
+---
+
+## Exercise 10.4 — Build a Regression ARD with `cardx::ard_regression()`
+
+Wrap `model_fit` in `cardx::ard_regression()` with `exponentiate = TRUE` so you get Odds Ratios. Filter the output to the `TRT01A` variable so you can see the Placebo reference row inline with the other levels.
+
+```{r ch10-ex4, exercise=TRUE, exercise.lines=12}
+# Build the regression ARD on the OR scale
+reg_ard <- cardx::ard_regression(model_fit, exponentiate = ___)
+
+# View formatted Odds Ratios for TRT01A only
+reg_ard %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt) %>%
+  filter(variable == "TRT01A", stat_name == "estimate")
+```
+
+```{r ch10-ex4-hint-1}
+# exponentiate = TRUE turns log-odds into odds ratios.
 ```
 
 ```{r ch10-ex4-solution}
-tidy_helpers <- broom.helpers::tidy_plus_plus(model_fit)
-
-tidy_helpers %>%
-  select(variable, label, reference_row, estimate)
+reg_ard <- cardx::ard_regression(model_fit, exponentiate = TRUE)
+reg_ard %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt) %>%
+  filter(variable == "TRT01A", stat_name == "estimate")
 ```
 
 ```{r ch10-ex4-check}
 grade_result(
-  pass_if(~ TRUE, "Brilliant! You can now see the Placebo row has been safely restored, labeled as the reference row, and given an estimate of 0 (which becomes OR=1 when exponentiated)."),
-  fail_if(~ FALSE, "")
+  pass_if(~ is.data.frame(.result) && nrow(.result) >= 3 && any(grepl("Placebo", .result$variable_level)), "Excellent. Three rows for TRT01A — Placebo (reference, OR = 1.00), Low Dose, and High Dose — all in the standard ARD schema."),
+  fail_if(~ TRUE, "Pass exponentiate = TRUE and filter on variable == 'TRT01A' and stat_name == 'estimate'.")
 )
 ```
 
+> **Look at the Placebo row's `stat_fmt`:** it reads as a plain `1.00` (or whatever your formatter renders the literal 1.0 as). The CI columns for that row are NA. This is the ARD-shape encoding of "OR = 1 (Reference)" — and the downstream `{gtsummary}` table will substitute the string `"(Reference)"` automatically when it sees the `reference_row` flag.
+
 ---
 
-## 10.5 Customizing the Tidier in cardx
+### 10.14 Model Classes Both Tidiers Cover (and the Gaps)
 
-Because `{cardx::ard_regression()}` uses `tidy_plus_plus()` by default, your ARDs will automatically contain the reference levels needed for clinical tables!
+Both `broom` and `parameters` are method-dispatched: each adds a `tidy.modelclass()` method for every class they support. Coverage is broad but not identical.
 
-If you ever find yourself working with an exotic model class that `{broom.helpers}` struggles with, you can bypass this automation and force `{cardx}` to use a specific tidying function via the `tidy_fun` argument.
+| Model class      | `broom::tidy()` | `parameters::model_parameters()` | Notes                                                                |
+|------------------|-----------------|-----------------------------------|----------------------------------------------------------------------|
+| `lm`             | yes             | yes                               | Both default to Wald CIs.                                            |
+| `glm`            | yes             | yes                               | `broom` default CI is profile likelihood; `parameters` is Wald.       |
+| `coxph` (survival) | yes           | yes                               | Both produce log-hazard estimates; `exponentiate = TRUE` recommended. |
+| `lmer` (lme4)    | yes             | yes                               | `parameters` returns fixed and random structure rows; `broom` only fixed effects (`broom.mixed::tidy()` covers more). |
+| `glmer`          | yes             | yes                               | Same as `lmer`.                                                       |
+| `geeglm`         | yes             | yes                               | Robust SE by construction; both tidiers respect it.                   |
+| `lmrob`, `glmrob` | partial        | yes                               | `broom` may miss some robust-fit columns.                             |
+| `gam` (mgcv)     | yes             | yes                               | Smooth terms tidy into recognisable rows.                             |
+| `polr` (ordinal) | yes             | yes                               | Both support, but column meanings differ slightly.                    |
+| Bayesian models (`brms`, `rstanarm`) | via `broom.mixed` | yes              | `parameters` is generally more polished for Bayesian draws.           |
 
-```r
-# Example of overriding the default tidier
-ard_reg <- ard_regression(
+The practical heuristic: if your model is a standard frequentist regression (`lm`, `glm`, `coxph`), pick the default `tidy_plus_plus` path. If it is a mixed model or a Bayesian model, evaluate both tidiers and pick the one whose output the rest of your pipeline expects.
+
+> **SAS analog:** the difference between `PROC LOGISTIC`, `PROC GENMOD`, `PROC MIXED`, `PROC PHREG`, `PROC NLMIXED`, `PROC GLIMMIX`, and `PROC MCMC` — each has its own ODS dataset shape. In R, `broom` and `parameters` *normalize* across model classes. Which one you pick determines which normalization you get.
+
+---
+
+### 10.15 Common Pitfalls When Choosing Between Tidiers
+
+A short troubleshooting catalog drawn from real reporting projects:
+
+| Symptom                                                          | Likely cause                                                    | Fix                                                                       |
+|------------------------------------------------------------------|------------------------------------------------------------------|---------------------------------------------------------------------------|
+| `$estimate` returns NULL                                         | Tidier used was `parameters`, column is `Coefficient`.           | Either rename the column or switch the tidier to `broom`.                  |
+| Reference row missing in the final OR table                      | Used `broom::tidy` or `ard_regression_basic()`.                  | Use `ard_regression()` (default) or `tidy_plus_plus(add_reference_rows = TRUE)`. |
+| Reference row appears, but with a numeric estimate instead of "Reference" | `reference_row` flag not honored by the layout tool.    | Pass through `apply_fmt_fun()` *after* `ard_regression()`; do not handcraft formatting.|
+| OR look like ~ 0.4 to 0.6 instead of ~ 1.0                       | Forgot `exponentiate = TRUE`.                                    | Add it to `ard_regression()` or to `tidy_fun`.                            |
+| CI bounds are nonsensical relative to the OR                     | Exponentiated estimate manually but not the CI.                  | Always exponentiate through the tidier, never by hand.                     |
+| Column names mix `term`/`Parameter`                              | Two tidiers feeding the same downstream code.                    | Standardize on one (recommended: `broom` via `tidy_plus_plus`).            |
+| Profile-likelihood CI is too slow                                | `glm` with many predictors and `broom::tidy` defaults.           | Pass `tidy_fun = function(x, ...) broom::tidy(x, conf.int = TRUE, ...)` with Wald.|
+| Variable labels missing from the final table                     | Input data has no `label()` attributes.                          | Set them with `attr(data$var, "label") <- "..."` before fitting the model. |
+| Factor level appears glued to variable name (`TRT01AXan...`)     | Used `broom::tidy` directly without `tidy_plus_plus`.            | Switch to `ard_regression()` so the term is parsed.                        |
+
+> **SAS analog:** these are the same pitfalls you encountered the first time you tried to build a clinical Odds Ratio table from raw `ODS OUTPUT` datasets without writing a wrapper macro. The fixes here are package-level, not per-script.
+
+---
+
+### 10.16 The Big Picture — One Model, Three Possible Outputs
+
+Putting the whole chapter on one sticky note:
+
+```
+                              +-------------------+
+                              |   fitted model    |
+                              +---------+---------+
+                                        |
+            +---------------------------+----------------------------+
+            |                           |                            |
+            v                           v                            v
+   +--------------------+   +----------------------+   +--------------------------+
+   | broom::tidy(fit)   |   | parameters::         |   | broom.helpers::          |
+   |                    |   |   model_parameters() |   |   tidy_plus_plus()       |
+   +--------------------+   +----------------------+   +--------------------------+
+   - snake_case names    - PascalCase names           - broom column names
+   - no reference row    - reference row optional     - reference row INJECTED
+   - minimalist          - mixed-effects metadata     - variable labels recovered
+                                                      - term parsed into var + level
+                                                      - exponentiate handled
+                                                      |
+                                                      v
+                                       +-------------------------------+
+                                       |   cardx::ard_regression()     |
+                                       |   --> ARD schema you know     |
+                                       |   --> ready for gtsummary,    |
+                                       |       flextable, ARS JSON     |
+                                       +-------------------------------+
+```
+
+Pick a tidier, and the downstream is largely determined. `broom.helpers` + `cardx` is the recipe that "just works" for ~99% of clinical reports. The other 1% is when you need to drop into `parameters` for mixed-model metadata — and even then you re-emerge through `tidy_fun` back into the same `ard_regression()` call.
+
+---
+
+## Exercise 10.5 — Override the Default Tidier in `ard_regression()`
+
+Build *two* ARDs from the same `model_fit`: one using the default tidier (`tidy_plus_plus`) and one using the strict `broom::tidy`. Compare the row counts. The default version should have **more rows** because it includes the reference level.
+
+```{r ch10-ex5, exercise=TRUE, exercise.lines=15}
+# ARD using the default (broom.helpers::tidy_plus_plus)
+ard_default <- cardx::ard_regression(model_fit, exponentiate = TRUE)
+
+# ARD using strict broom::tidy (no reference rows)
+ard_basic <- cardx::ard_regression(
   model_fit,
-  tidy_fun = broom::tidy # Forces the use of strict broom
+  exponentiate = TRUE,
+  tidy_fun = ___
+)
+
+# Compare row counts for the estimate stat only
+list(
+  default_rows = nrow(ard_default %>% filter(stat_name == "estimate")),
+  basic_rows   = nrow(ard_basic   %>% filter(stat_name == "estimate"))
 )
 ```
 
-In 99% of clinical trial scenarios, however, the default `{broom.helpers}` integration works perfectly right out of the box.
-
----
-
-## Exercise 10.5 — Creating the Regression ARD
-
-Finally, let's wrap our model in `ard_regression()` to see how `{cardx}` takes the `broom.helpers` output and transforms it into the standard, long-format ARD structure you learned in Chapter 9.
-
-```{r ch10-ex5, exercise=TRUE, exercise.lines=12}
-# Create the ARD for the regression model
-# Let's also ask it to exponentiate the coefficients into Odds Ratios
-reg_ard <- ard_regression(model_fit, exponentiate = TRUE)
-
-# Format and view the ARD
-reg_ard %>%
-  apply_fmt_fun() %>%
-  unlist_ard_columns(columns = stat_fmt) %>%
-  select(variable, variable_level, stat_name, stat_fmt) %>%
-  filter(variable == "TRT01A") # Focus only on the Treatment variable
+```{r ch10-ex5-hint-1}
+# Pass broom::tidy by name (no parentheses) into tidy_fun.
 ```
 
 ```{r ch10-ex5-solution}
-reg_ard <- ard_regression(model_fit, exponentiate = TRUE)
-
-reg_ard %>%
-  apply_fmt_fun() %>%
-  unlist_ard_columns(columns = stat_fmt) %>%
-  select(variable, variable_level, stat_name, stat_fmt) %>%
-  filter(variable == "TRT01A")
+ard_default <- cardx::ard_regression(model_fit, exponentiate = TRUE)
+ard_basic <- cardx::ard_regression(
+  model_fit,
+  exponentiate = TRUE,
+  tidy_fun = broom::tidy
+)
+list(
+  default_rows = nrow(ard_default %>% filter(stat_name == "estimate")),
+  basic_rows   = nrow(ard_basic   %>% filter(stat_name == "estimate"))
+)
 ```
 
 ```{r ch10-ex5-check}
 grade_result(
-  pass_if(~ is.data.frame(.result) && "stat_fmt" %in% names(.result), "Excellent! You can see the Placebo reference row is fully intact within the ARD structure, showing an Odds Ratio estimate of 1."),
-  fail_if(~ TRUE, "Make sure to run the ard_regression code.")
+  pass_if(~ is.list(.result) && .result$default_rows > .result$basic_rows, "Correct. The default ARD has more `estimate` rows because tidy_plus_plus injected the Placebo reference row; the strict-broom path did not."),
+  fail_if(~ TRUE, "Set tidy_fun = broom::tidy on the basic ARD, then compare row counts.")
 )
 ```
+
+> **The trade-off in one line:** the default `tidy_plus_plus` path gives you a clinical-ready table at the cost of a row whose "estimate" is a synthetic 1.00. The strict-broom path gives you only what the model actually computed, at the cost of a missing row that a human reviewer expects to see.
+
+---
+
+## Exercise 10.6 — Use `parameters::model_parameters()` Inside `ard_regression()`
+
+Wrap `parameters::model_parameters()` in a small lambda so it returns broom-compatible column names with `keep_reference = TRUE`, then pass it as the `tidy_fun` of `ard_regression()`. Confirm the resulting ARD still contains a Placebo row.
+
+```{r ch10-ex6, exercise=TRUE, exercise.lines=20}
+# Wrap parameters in a function that keeps reference rows
+param_tidier <- function(x, ...) {
+  parameters::model_parameters(x, keep_reference = ___, ...) %>%
+    parameters::standardize_names(style = "broom")
+}
+
+# Build the ARD
+ard_param <- cardx::ard_regression(
+  model_fit,
+  exponentiate = TRUE,
+  tidy_fun = param_tidier
+)
+
+# Confirm Placebo is in the resulting ARD
+ard_param %>%
+  filter(variable == "TRT01A", stat_name == "estimate") %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt)
+```
+
+```{r ch10-ex6-hint-1}
+# keep_reference = TRUE keeps the Placebo row in parameters' output.
+```
+
+```{r ch10-ex6-solution}
+param_tidier <- function(x, ...) {
+  parameters::model_parameters(x, keep_reference = TRUE, ...) %>%
+    parameters::standardize_names(style = "broom")
+}
+ard_param <- cardx::ard_regression(
+  model_fit,
+  exponentiate = TRUE,
+  tidy_fun = param_tidier
+)
+ard_param %>%
+  filter(variable == "TRT01A", stat_name == "estimate") %>%
+  apply_fmt_fun() %>%
+  unlist_ard_columns(columns = stat_fmt) %>%
+  select(variable, variable_level, stat_name, stat_fmt)
+```
+
+```{r ch10-ex6-check}
+grade_result(
+  pass_if(~ is.data.frame(.result) && any(grepl("Placebo", .result$variable_level)), "Brilliant. You replaced the tidier engine but kept the rest of the pipeline. The Placebo row survives because the lambda enabled keep_reference; the column-name translation happened via standardize_names(style = 'broom')."),
+  fail_if(~ TRUE, "Set keep_reference = TRUE inside the lambda so parameters keeps the Placebo row.")
+)
+```
+
+> **What you just learned:** `tidy_fun` is the *only* seam you ever need to reach for in `ard_regression()`. Everything else — formatting, ARD shape, downstream layout — is unaffected by which engine you pick.
 
 ---
 
@@ -235,30 +788,111 @@ quiz(
   caption = "Chapter 10 — Check Your Understanding",
 
   question(
-    "What is the equivalent of SAS's `ODS OUTPUT ParameterEstimates = ds;` in the R modeling ecosystem?",
+    "What is the closest R equivalent of SAS's `ODS OUTPUT ParameterEstimates = est;`?",
     answer("`glm()`"),
     answer("`summary()`"),
-    answer("Model Tidiers like `broom::tidy()`", correct = TRUE),
-    answer("`PROC PRINT`"),
+    answer("A tidier such as `broom::tidy(fit)` or `parameters::model_parameters(fit)`", correct = TRUE),
+    answer("`print(fit)`"),
     allow_retry = TRUE
   ),
 
   question(
-    "Why is the `{broom}` package alone insufficient for clinical reporting of categorical variables?",
-    answer("It crashes when trying to extract odds ratios."),
-    answer("It strictly removes reference class levels (e.g. Placebo) from the output because their mathematical coefficient is 0.", correct = TRUE),
-    answer("It uses `Parameter` instead of `term` for column names."),
-    answer("It cannot calculate p-values."),
+    "Why does `broom::tidy()` omit the Placebo row for a three-level treatment factor?",
+    answer("It is a bug in the package."),
+    answer("Placebo's coefficient is mathematically zero (the reference level), so no row is computed for it.", correct = TRUE),
+    answer("Because `broom` filters out treatment arms named `Placebo`."),
+    answer("Because the model failed to converge."),
     allow_retry = TRUE
   ),
 
   question(
-    "What crucial role does `{broom.helpers::tidy_plus_plus()}` play when `{cardx}` builds a regression ARD?",
-    answer("It calculates the original model math."),
-    answer("It generates standard TLF RTF files."),
-    answer("It standardizes column names, adds variable labels, and intelligently reconstructs the missing reference rows.", correct = TRUE),
-    answer("It converts datasets to SAS transport files."),
+    "Which package injects the reference row, recovers variable labels, and parses the term back into variable + level — all without changing the column-name dictionary used by `broom`?",
+    answer("`{parameters}`"),
+    answer("`{broom.helpers}`", correct = TRUE),
+    answer("`{cardx}`"),
+    answer("`{gtsummary}`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What is the name of the `broom::tidy()` column that `parameters::model_parameters()` calls `Coefficient`?",
+    answer("`term`"),
+    answer("`std.error`"),
+    answer("`estimate`", correct = TRUE),
+    answer("`statistic`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "You forgot `exponentiate = TRUE`. What will your Odds Ratio column look like?",
+    answer("All ones"),
+    answer("Small numbers near zero (negative for protective effects, positive for risk) — they are log-odds, not odds ratios", correct = TRUE),
+    answer("Reproducible but inflated to scientific notation"),
+    answer("NA throughout"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Which argument of `cardx::ard_regression()` lets you replace the upstream tidier (for example, swap in `parameters::model_parameters()` instead of `broom.helpers::tidy_plus_plus()`)?",
+    answer("`exponentiate`"),
+    answer("`tidy_fun`", correct = TRUE),
+    answer("`statistic`"),
+    answer("`variable`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "What does the `reference_row = TRUE` flag in a tidied data frame tell a downstream layout tool to do?",
+    answer("Skip the row entirely."),
+    answer("Render the cell as `(Reference)` and suppress the CI/p-value, instead of formatting the synthetic estimate as a number.", correct = TRUE),
+    answer("Highlight the row in red."),
+    answer("Re-run the model with that level as the new reference."),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "A SAS programmer is used to PROC LOGISTIC printing the reference class automatically. Which R function is the closest behavioral analog for clinical reporting?",
+    answer("`broom::tidy()`"),
+    answer("`broom.helpers::tidy_plus_plus()`", correct = TRUE),
+    answer("`coef()`"),
+    answer("`summary()`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "You want to produce a forest plot that has *only* non-reference levels. Which `cardx` call is most appropriate?",
+    answer("`ard_regression(fit)` with the default tidier"),
+    answer("`ard_regression(fit, tidy_fun = broom::tidy)` (or `ard_regression_basic(fit)`)", correct = TRUE),
+    answer("`ard_categorical(fit)`"),
+    answer("`ard_continuous(fit)`"),
+    allow_retry = TRUE
+  ),
+
+  question(
+    "Why is exponentiating the estimate manually with `exp(coef(fit))` dangerous for clinical reporting?",
+    answer("It is computationally slow."),
+    answer("It exponentiates the point estimate but typically forgets the CI bounds, producing a printed CI that does not bracket the printed OR.", correct = TRUE),
+    answer("`exp()` is not vectorized."),
+    answer("It rounds the result automatically."),
     allow_retry = TRUE
   )
 )
 ```
+
+---
+
+## Chapter 10 Summary {.congratulations}
+
+You now understand:
+
+- The two competing model-tidier ecosystems in R — **`{broom}`** and **`{parameters}`** — and the column-name dictionary that translates between them (`term` vs `Parameter`, `estimate` vs `Coefficient`, and so on).
+- Why `broom::tidy()` silently **drops the reference row** for categorical predictors and what that means for clinical OR / HR tables.
+- How **`broom.helpers::tidy_plus_plus()`** acts as a Rosetta Stone: it keeps `broom`'s column names, reinjects the reference row, recovers variable labels, parses terms into `variable + level`, and offers a single consistent `exponentiate` flag.
+- The five things `tidy_plus_plus()` adds on top of `broom::tidy()` — reference rows, labels, term parsing, contrast metadata, exponentiation.
+- The most common reporting bug in this space — exponentiating the estimate without the CI — and why letting the tidier handle exponentiation eliminates it.
+- The role of the **`tidy_fun`** argument in `cardx::ard_regression()` as the single seam you ever need to swap out the upstream tidier without touching the rest of the pipeline.
+- When to pick `broom`-only vs `tidy_plus_plus` vs `parameters` based on the model class and the downstream display.
+- A practical pitfalls catalog for diagnosing missing reference rows, mis-exponentiated effects, mismatched CI methods, and column-name surprises.
+- Where each piece sits in the bigger picture: fitted model → tidier → ARD → table — and that the choice of tidier locks in everything else.
+
+**Next:** Chapter 11 (if present) builds on this regression foundation; otherwise return to the curriculum index. You now have everything you need to ship regression results in any tidier dialect and translate fluently between them.
